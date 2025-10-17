@@ -69,6 +69,7 @@ obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp $(RTL_DIR)/videomode.vh
 	@verilator --quiet --cc $(SOURCES) \
 	           --exe $(SIM_DIR)/main.cpp \
 	           --top-module vga_nyancat \
+	           --trace \
 	           -I$(RTL_DIR) \
 	           $(VFLAGS) \
 	           -CFLAGS "$(CFLAGS)" -LDFLAGS "$(LDFLAGS)"
@@ -89,18 +90,44 @@ run: $(SIM_BINARY)
 	@echo "Starting VGA Nyancat simulation..."
 	@cd $(OUT) && ./Vvga_nyancat
 
-# Generate test image
+# Generate test image and verify timing
 check: $(SIM_BINARY)
-	@echo "Generating test image..."
-	@cd $(OUT) && ./Vvga_nyancat --save-png test.png
+	@echo "Running verification (image + timing analysis)..."
+	@cd $(OUT) && ./Vvga_nyancat --save-png test.png --trace check.vcd --trace-clocks 10000
 	@echo "Generated $(OUT)/test.png"
 	@ls -lh $(OUT)/test.png
+	@echo ""
+	@echo "Verifying VGA timing..."
+	@python3 scripts/analyze-vcd.py $(OUT)/check.vcd --report $(OUT)/check-report.txt
+	@echo ""
+	@echo "✅ Verification complete: $(OUT)/test.png and $(OUT)/check-report.txt"
+
+# Generate VCD waveform trace (10000 clock cycles)
+trace: $(SIM_BINARY)
+	@echo "Generating VCD waveform trace..."
+	@cd $(OUT) && ./Vvga_nyancat --save-png test.png --trace waves.vcd --trace-clocks 10000
+	@echo "Generated $(OUT)/waves.vcd"
+	@ls -lh $(OUT)/waves.vcd
+	@echo "View with: surfer $(OUT)/waves.vcd"
+
+# Generate full frame VCD trace (warning: large file)
+trace-full: $(SIM_BINARY)
+	@echo "Generating full frame VCD trace (this may take a while)..."
+	@cd $(OUT) && ./Vvga_nyancat --save-png test.png --trace waves-full.vcd --trace-clocks $(shell echo $$((832 * 520)))
+	@echo "Generated $(OUT)/waves-full.vcd"
+	@ls -lh $(OUT)/waves-full.vcd
+
+# View VCD trace with surfer
+trace-view: trace
+	@echo "Opening waveform viewer..."
+	@surfer $(OUT)/waves.vcd
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -f *.log
+	@rm -f *.log *.vcd
 	@rm -rf obj_dir
+	@rm -f $(OUT)/*.vcd
 
 # Clean everything including downloaded source
 distclean: clean
@@ -131,4 +158,4 @@ indent:
 		exit 1; \
 	fi
 
-.PHONY: all build run check clean distclean regen-data indent
+.PHONY: all build run check trace trace-full trace-view clean distclean regen-data indent

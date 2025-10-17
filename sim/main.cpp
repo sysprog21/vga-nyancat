@@ -20,6 +20,7 @@
 
 #include "Vvga_nyancat.h"
 #include "verilated.h"
+#include "verilated_vcd_c.h"  // For VCD waveform tracing
 
 // Video mode configuration (must match RTL videomode.vh settings)
 // Default: VGA 640×480 @ 72Hz
@@ -259,14 +260,21 @@ void save_framebuffer_png(const char *filename,
 
 void print_usage(const char *prog)
 {
-    std::cout << "Usage: " << prog << " [options]\n"
-              << "Options:\n"
-              << "  --save-png <file>  Save single frame to PNG and exit\n"
-              << "  --help             Show this help\n\n"
-              << "Interactive keys:\n"
-              << "  p     - Save frame to test.png\n"
-              << "  ESC   - Reset animation\n"
-              << "  q     - Quit\n";
+    std::cout
+        << "Usage: " << prog << " [options]\n"
+        << "Options:\n"
+        << "  --save-png <file>   Save single frame to PNG and exit\n"
+        << "  --trace <file.vcd>  Enable VCD waveform tracing for debugging\n"
+        << "  --trace-clocks <N>  Limit VCD trace to first N clock cycles "
+           "(default: 1 frame)\n"
+        << "  --help              Show this help\n\n"
+        << "Interactive keys:\n"
+        << "  p     - Save frame to test.png\n"
+        << "  ESC   - Reset animation\n"
+        << "  q     - Quit\n\n"
+        << "VCD waveform analysis:\n"
+        << "  Generate: ./Vvga_nyancat --trace waves.vcd --trace-clocks 10000\n"
+        << "  View:     surfer waves.vcd  (or gtkwave waves.vcd)\n";
 }
 
 // Simulate VGA frame generation with performance optimizations
@@ -285,11 +293,17 @@ void print_usage(const char *prog)
 //   - Sentinel value (-1) for blanking row detection (single bounds check)
 //   - Direct pointer arithmetic for framebuffer access
 //   - Bit shifts for 4-byte alignment (hpos << 2 instead of hpos * 4)
+//
+// VCD tracing:
+//   - If trace is non-null, records all signal changes to VCD file
+//   - trace_time: simulation time counter (incremented per clock edge)
 inline void simulate_frame(Vvga_nyancat *top,
                            uint8_t *fb,
                            int &hpos,
                            int &vpos,
-                           int clocks)
+                           int clocks,
+                           VerilatedVcdC *trace = nullptr,
+                           vluint64_t *trace_time = nullptr)
 {
     // Precompute row base address for current row
     int row_base = (vpos >= 0 && vpos < V_RES) ? (vpos * H_RES) << 2 : -1;
@@ -299,8 +313,15 @@ inline void simulate_frame(Vvga_nyancat *top,
         // Both edges need eval() for correct state propagation
         top->clk = 0;
         top->eval();
+        if (trace && trace_time) {
+            trace->dump((*trace_time)++);
+        }
+
         top->clk = 1;
         top->eval();
+        if (trace && trace_time) {
+            trace->dump((*trace_time)++);
+        }
 
         // Detect frame start: both syncs go low simultaneously during vsync
         if (!top->hsync && !top->vsync) {
@@ -342,12 +363,18 @@ int main(int argc, char **argv)
 {
     bool save_and_exit = false;
     const char *output_file = "test.png";
+    const char *trace_file = nullptr;
+    int trace_clocks = CLOCKS_PER_FRAME;  // Default: 1 complete frame
 
     // Command line argument parsing
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--save-png") == 0 && i + 1 < argc) {
             save_and_exit = true;
             output_file = argv[++i];
+        } else if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
+            trace_file = argv[++i];
+        } else if (strcmp(argv[i], "--trace-clocks") == 0 && i + 1 < argc) {
+            trace_clocks = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -356,7 +383,21 @@ int main(int argc, char **argv)
 
     // Initialize Verilator
     Verilated::commandArgs(argc, argv);
+    Verilated::traceEverOn(true);  // Enable tracing for VCD generation
     Vvga_nyancat *top = new Vvga_nyancat;
+
+    // Initialize VCD tracing if requested
+    VerilatedVcdC *trace = nullptr;
+    vluint64_t trace_time = 0;
+    int remaining_trace_clocks = trace_clocks;
+
+    if (trace_file) {
+        trace = new VerilatedVcdC;
+        top->trace(trace, 99);  // Trace 99 levels of hierarchy
+        trace->open(trace_file);
+        std::cout << "VCD tracing enabled: " << trace_file << "\n";
+        std::cout << "Trace duration: " << trace_clocks << " clock cycles\n";
+    }
 
     // Perform reset sequence: hold reset for multiple cycles to ensure
     // complete initialization of all sequential elements
@@ -364,8 +405,17 @@ int main(int argc, char **argv)
     for (int i = 0; i < 8; ++i) {
         top->clk = 0;
         top->eval();
+        if (trace && remaining_trace_clocks > 0) {
+            trace->dump(trace_time++);
+            remaining_trace_clocks--;
+        }
+
         top->clk = 1;
         top->eval();
+        if (trace && remaining_trace_clocks > 0) {
+            trace->dump(trace_time++);
+            remaining_trace_clocks--;
+        }
     }
     top->reset_n = 1;
     top->clk = 0;
@@ -405,8 +455,19 @@ int main(int argc, char **argv)
 
     // Batch mode: generate one frame and exit
     if (save_and_exit) {
-        // Simulate exactly one complete frame (432,640 clocks)
-        simulate_frame(top, fb_ptr, hpos, vpos, CLOCKS_PER_FRAME);
+        // Simulate exactly one complete frame
+        // Enable tracing for batch mode if requested
+        int sim_clocks = CLOCKS_PER_FRAME;
+        if (trace && remaining_trace_clocks > 0) {
+            sim_clocks = (remaining_trace_clocks < CLOCKS_PER_FRAME)
+                             ? remaining_trace_clocks
+                             : CLOCKS_PER_FRAME;
+        }
+
+        simulate_frame(top, fb_ptr, hpos, vpos, sim_clocks, trace, &trace_time);
+        if (trace) {
+            remaining_trace_clocks -= sim_clocks * 2;  // 2 edges per clock
+        }
 
         // Update SDL texture and save PNG
         SDL_UpdateTexture(texture, nullptr, fb_ptr, H_RES * 4);
@@ -442,10 +503,9 @@ int main(int argc, char **argv)
         auto keystate = SDL_GetKeyboardState(nullptr);
         top->reset_n = !keystate[SDL_SCANCODE_ESCAPE];
 
-        // Simulate in smaller chunks for responsive input (50,000 clocks)
-        // ~9 iterations per frame provides good balance of performance and
-        // responsiveness
-        simulate_frame(top, fb_ptr, hpos, vpos, 50000);
+        // Simulate in smaller chunks for responsive input
+        // VCD tracing disabled in interactive mode (too much data)
+        simulate_frame(top, fb_ptr, hpos, vpos, 50000, nullptr, nullptr);
 
         // Update display after each simulation chunk
         SDL_UpdateTexture(texture, nullptr, fb_ptr, H_RES * 4);
@@ -454,6 +514,13 @@ int main(int argc, char **argv)
     }
 
     // Cleanup
+    if (trace) {
+        trace->close();
+        delete trace;
+        std::cout << "VCD trace saved to " << trace_file << "\n";
+        std::cout << "View with: surfer " << trace_file << "\n";
+    }
+
     top->final();
     delete top;
     SDL_DestroyTexture(texture);
