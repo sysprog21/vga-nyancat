@@ -1,5 +1,7 @@
 # VGA Nyancat
 
+![CI](https://github.com/sysprog21/vga-nyancat/actions/workflows/main.yml/badge.svg)
+
 Hardware-accelerated Nyancat (Pop-Tart Cat) animation on VGA display,
 implemented in Verilog RTL and simulated using [Verilator](https://verilator.org/).
 Features real-time hardware scaling, ROM-based animation storage, and a 2-stage rendering pipeline.

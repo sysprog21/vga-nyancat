@@ -1,0 +1,62 @@
+name: CI Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        video_mode:
+          - VGA_640x480_72
+          - VGA_800x600_60
+      fail-fast: false
+      max-parallel: 2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            verilator \
+            libsdl2-dev \
+            python3 \
+            make \
+            g++
+
+      - name: Check Verilator version
+        run: verilator --version
+
+      - name: Cache Verilator build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            obj_dir
+            build/nyancat-frames.hex
+            build/nyancat-colors.hex
+          key: verilator-${{ runner.os }}-${{ matrix.video_mode }}-${{ hashFiles('rtl/**/*.v', 'rtl/**/*.vh', 'sim/**/*.cpp') }}
+          restore-keys: |
+            verilator-${{ runner.os }}-${{ matrix.video_mode }}-
+
+      - name: Lint Verilog code
+        run: |
+          verilator --lint-only -Wall -Wno-fatal \
+            -DVIDEO_MODE_${{ matrix.video_mode }} \
+            -Irtl rtl/vga-sync-gen.v rtl/nyancat.v rtl/vga-nyancat.v
+
+      - name: Build simulation
+        run: make build VIDEO_MODE=${{ matrix.video_mode }}
+
+      - name: Run verification
+        run: make check VIDEO_MODE=${{ matrix.video_mode }}
