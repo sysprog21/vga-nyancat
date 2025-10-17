@@ -1,0 +1,20 @@
+# Build artifacts
+obj_dir/
+*.o
+*.a
+*.d
+
+# Build output directory
+build/
+
+# Verilator outputs
+*.log
+
+# Editor artifacts
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Downloaded tools
+tools/

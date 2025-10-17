@@ -1,0 +1,37 @@
+# Verible Verilog Format Configuration
+# Follows .verilog-style guidelines (4 spaces, max 100 chars)
+
+# Basic indentation (4 spaces, no tabs)
+--indentation_spaces=4
+--wrap_spaces=4
+
+# Line length limit (100 characters max)
+--column_limit=100
+--line_break_penalty=2
+--over_column_limit_penalty=100
+
+# Port and module formatting
+--port_declarations_alignment=align
+--port_declarations_indentation=indent
+--named_port_alignment=align
+--named_port_indentation=indent
+
+# Parameters
+--formal_parameters_alignment=align
+--formal_parameters_indentation=indent
+--named_parameter_alignment=align
+--named_parameter_indentation=indent
+
+# Assignment and alignment
+--assignment_statement_alignment=infer
+--case_items_alignment=infer
+--class_member_variable_alignment=infer
+--module_net_variable_alignment=align
+
+# Formatting behavior
+--try_wrap_long_lines=true
+--expand_coverpoints=false
+--compact_indexing_and_selections=true
+
+# Failsafe mode (always preserve original on error)
+--failsafe_success=true
