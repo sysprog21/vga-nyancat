@@ -83,31 +83,30 @@ module nyancat (
     //   3. Calculate ROM address from frame index and source coordinates
 
     // Step 1: Remove centering offset to get coordinates relative to animation area
-    // Use signed arithmetic with sufficient width to handle all video modes
-    wire signed [X_COORD_WIDTH:0] rel_x_signed = $signed({1'b0, x_px}) - OFFSET_X;
-    wire signed [Y_COORD_WIDTH:0] rel_y_signed = $signed({1'b0, y_px}) - OFFSET_Y;
-    wire [X_COORD_WIDTH-1:0] rel_x = rel_x_signed[X_COORD_WIDTH-1:0];
-    wire [Y_COORD_WIDTH-1:0] rel_y = rel_y_signed[Y_COORD_WIDTH-1:0];
-
-    // Check if current pixel falls within the scaled animation display area
+    // Bounds check first to avoid underflow, then compute relative coordinates
+    wire                     in_display_x = (x_px >= OFFSET_X) && (x_px < OFFSET_X + SCALED_W);
     /* verilator lint_off UNSIGNED */
-    wire in_display = (x_px >= OFFSET_X) && (x_px < OFFSET_X + SCALED_W) &&
-        (y_px < OFFSET_Y + SCALED_H);  // y_px >= 0 always true
+    wire                     in_display_y = (y_px >= OFFSET_Y) && (y_px < OFFSET_Y + SCALED_H);
     /* verilator lint_on UNSIGNED */
+    wire                     in_display = in_display_x && in_display_y;
+
+    // Relative coordinates (valid only when in_display is high)
+    wire [X_COORD_WIDTH-1:0] rel_x = x_px - OFFSET_X;
+    wire [Y_COORD_WIDTH-1:0] rel_y = y_px - OFFSET_Y;
 
     // Step 2: Descale coordinates (divide by 8) to map to source frame [0,63]
     // Shift right by 3 bits (divide by 8) and take lower 6 bits for 64×64 frame
     /* verilator lint_off WIDTHTRUNC */
-    wire [5:0] src_x = rel_x[8:3], src_y = rel_y[8:3];  // Right shift 3 = divide by 8
+    wire [              5:0] src_x = rel_x[8:3], src_y = rel_y[8:3];  // Right shift 3 = divide by 8
     /* verilator lint_on WIDTHTRUNC */
 
     // Step 3: Calculate ROM address using frame index and source coordinates
-    // Formula: addr = (frame_index * 4096) + (src_y * 64) + src_x
-    // Optimized with bit concatenation and OR instead of multiply/add:
-    //   frame_index * 4096 = frame_index << 12
-    //   src_y * 64 = src_y << 6
+    // Formula: addr = (frame_index * FRAME_W * FRAME_H) + (src_y * FRAME_W) + src_x
+    // Synthesis tools automatically optimize multiplies by power-of-2 constants
+    // into shift operations, so explicit bit manipulation is unnecessary
+    localparam FRAME_SIZE = FRAME_W * FRAME_H;  // 4096 4-bit entries (2048 bytes)
     /* verilator lint_off WIDTHEXPAND */
-    wire [FRAME_ADDR_W-1:0] frame_addr = {frame_index, 12'b0} | {src_y, 6'b0} | src_x;
+    wire [FRAME_ADDR_W-1:0] frame_addr = (frame_index * FRAME_SIZE) + (src_y * FRAME_W) + src_x;
     /* verilator lint_on WIDTHEXPAND */
 
     // =========================================================================
@@ -143,11 +142,11 @@ module nyancat (
     reg [`PALETTE_MEM_DATA_WIDTH-1:0] color_q;  // Stage 2 output: Final color value
 
     // Pipeline datapath: Memory addressing → char lookup → color lookup
+    // Note: Reset values omitted for datapath registers - in_display flags
+    // ensure correct output gating regardless of pipeline register contents
     always @(posedge px_clk) begin
         if (reset) begin
-            char_idx_q <= 0;
-            in_display_q <= 0;
-            color_q <= 0;
+            in_display_q  <= 0;
             in_display_q2 <= 0;
         end else begin
             // Stage 1: Fetch character index using abstract memory interface

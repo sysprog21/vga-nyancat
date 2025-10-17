@@ -70,14 +70,17 @@ constexpr int H_TOTAL = H_RES + H_BLANKING;
 constexpr int V_TOTAL = V_RES + V_BLANKING;
 constexpr int CLOCKS_PER_FRAME = H_TOTAL * V_TOTAL;
 
-// Color conversion lookup table: 2-bit VGA channel → 8-bit RGB
+// Color conversion: 2-bit VGA channel → 8-bit RGB
 // Maps 2-bit color values to 8-bit with even spacing:
 //   0b00 → 0   (0%)
 //   0b01 → 85  (33%)
 //   0b10 → 170 (67%)
 //   0b11 → 255 (100%)
 // This provides better color fidelity than simple left-shift (×64)
-static const uint8_t color_lut[4] = {0, 85, 170, 255};
+constexpr uint8_t vga2bit_to_8bit(uint8_t val)
+{
+    return val * 85;  // Compiler optimizes to shift+add
+}
 
 // Standalone PNG encoder (no external dependencies)
 // Adapted from sysprog21/mado headless-ctl.c
@@ -217,12 +220,13 @@ static int save_png(const char *filename,
         pos += chunk;
     }
 
-    // ADLER32 checksum
-    uint32_t adler = 1;
+    // ADLER32 checksum (RFC 1950)
+    uint32_t s1 = 1, s2 = 0;
     for (size_t i = 0; i < raw_size; i++) {
-        adler = (adler + raw_data[i]) % 65521 +
-                ((((adler >> 16) + raw_data[i]) % 65521) << 16);
+        s1 = (s1 + raw_data[i]) % 65521;
+        s2 = (s2 + s1) % 65521;
     }
+    uint32_t adler = (s2 << 16) | s1;
     idat[idat_size++] = (adler >> 24) & 0xff;
     idat[idat_size++] = (adler >> 16) & 0xff;
     idat[idat_size++] = (adler >> 8) & 0xff;
@@ -337,10 +341,10 @@ inline void simulate_frame(Vvga_nyancat *top,
                 // Direct framebuffer write using precomputed row base
                 int idx = row_base + (hpos << 2);
                 uint8_t color = top->rrggbb;
-                fb[idx] = color_lut[color & 0b11];             // B
-                fb[idx + 1] = color_lut[(color >> 2) & 0b11];  // G
-                fb[idx + 2] = color_lut[(color >> 4) & 0b11];  // R
-                fb[idx + 3] = 255;                             // A
+                fb[idx] = vga2bit_to_8bit(color & 0b11);             // B
+                fb[idx + 1] = vga2bit_to_8bit((color >> 2) & 0b11);  // G
+                fb[idx + 2] = vga2bit_to_8bit((color >> 4) & 0b11);  // R
+                fb[idx + 3] = 255;                                   // A
             }
         }
 
