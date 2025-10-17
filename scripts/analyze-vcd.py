@@ -231,45 +231,43 @@ class VGATimingAnalyzer:
             print("  No glitches detected")
 
     def validate_vga_timing(self):
-        """Validate VGA timing against expected values"""
+        """Validate VGA timing consistency (works for any video mode)"""
         print("\n=== VGA Timing Validation ===")
 
-        # Expected values for VGA 640×480 @ 72Hz
-        expected_hsync_period = 832 * 2  # H_TOTAL * 2 (rising/falling edges)
-        expected_vsync_period = 832 * 520 * 2  # H_TOTAL * V_TOTAL * 2
+        # Instead of hardcoded values, check period consistency
+        # This works for any video mode
+        max_variance = 0.01  # 1% maximum variance between periods
 
-        tolerance = 0.05  # 5% tolerance
+        # Validate hsync period consistency
+        if len(self.analysis_results["hsync_period"]) > 1:
+            periods = self.analysis_results["hsync_period"]
+            avg_hsync = sum(periods) / len(periods)
+            max_dev = max(abs(p - avg_hsync) for p in periods)
+            variance = max_dev / avg_hsync if avg_hsync > 0 else 0
 
-        # Validate hsync period
-        if self.analysis_results["hsync_period"]:
-            avg_hsync = sum(self.analysis_results["hsync_period"]) / len(
-                self.analysis_results["hsync_period"]
-            )
-            deviation = abs(avg_hsync - expected_hsync_period) / expected_hsync_period
-
-            if deviation > tolerance:
-                violation = f"Hsync period deviation: {deviation*100:.1f}% (expected {expected_hsync_period}, got {avg_hsync:.0f})"
+            if variance > max_variance:
+                violation = f"Hsync period inconsistent: {variance*100:.1f}% variance (max {max_variance*100:.1f}%)"
                 self.analysis_results["timing_violations"].append(violation)
                 print(f"  ✗ {violation}")
             else:
                 print(
-                    f"  ✓ Hsync period: {avg_hsync:.0f} (expected {expected_hsync_period})"
+                    f"  ✓ Hsync period consistent: {avg_hsync:.0f} time units (variance {variance*100:.2f}%)"
                 )
 
-        # Validate vsync period
-        if self.analysis_results["vsync_period"]:
-            avg_vsync = sum(self.analysis_results["vsync_period"]) / len(
-                self.analysis_results["vsync_period"]
-            )
-            deviation = abs(avg_vsync - expected_vsync_period) / expected_vsync_period
+        # Validate vsync period consistency
+        if len(self.analysis_results["vsync_period"]) > 1:
+            periods = self.analysis_results["vsync_period"]
+            avg_vsync = sum(periods) / len(periods)
+            max_dev = max(abs(p - avg_vsync) for p in periods)
+            variance = max_dev / avg_vsync if avg_vsync > 0 else 0
 
-            if deviation > tolerance:
-                violation = f"Vsync period deviation: {deviation*100:.1f}% (expected {expected_vsync_period}, got {avg_vsync:.0f})"
+            if variance > max_variance:
+                violation = f"Vsync period inconsistent: {variance*100:.1f}% variance (max {max_variance*100:.1f}%)"
                 self.analysis_results["timing_violations"].append(violation)
                 print(f"  ✗ {violation}")
             else:
                 print(
-                    f"  ✓ Vsync period: {avg_vsync:.0f} (expected {expected_vsync_period})"
+                    f"  ✓ Vsync period consistent: {avg_vsync:.0f} time units (variance {variance*100:.2f}%)"
                 )
 
     def _find_edges(self, signal_tv, falling=True):
