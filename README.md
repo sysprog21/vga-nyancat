@@ -34,7 +34,6 @@ brew install sdl2 verilator python3
 ## Building and Running
 
 To build and run the interactive simulation:
-
 ```shell
 make run
 ```
@@ -53,7 +52,6 @@ Interactive controls:
 ## Testing
 
 To run automated tests and generate a test frame:
-
 ```shell
 make check
 ```
@@ -63,7 +61,6 @@ This generates `test.png` containing a single animation frame.
 ## Code Formatting
 
 Format all Verilog and C++ source files:
-
 ```shell
 make indent
 ```
@@ -144,7 +141,6 @@ Result: 230× compression (24KB vs 5.4MB for raw RGB888 storage)
                    ┌────────────▼─────────────────▼──────┐
                    │    Nyancat Animation Renderer       │
                    │         (nyancat.v)                 │
-                   │                                     │
                    │  ┌──────────────────────────────┐   │
                    │  │  Coordinate Transformation   │   │
                    │  │  • Remove offset             │   │
@@ -252,7 +248,6 @@ Vertical timing (per frame, 520 lines):
 Active video region (where animation is rendered):
   ┌───────────────────────────────────────────────────┐
   │ 640 × 480 VGA display                             │
-  │                                                   │
   │    ┌─────────────────────────────────┐            │
   │    │                                 │            │
   │    │    512 × 512 Nyancat            │  ◄─ Centered horizontally

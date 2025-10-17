@@ -6,6 +6,9 @@
 // Include parameterized video mode definitions
 `include "videomode.vh"
 
+// Include memory interface definitions
+`include "memory_if.vh"
+
 // Nyancat Animation Display Module
 //
 // Hardware-accelerated Nyancat (Pop-Tart Cat) animation renderer with real-time
@@ -108,35 +111,38 @@ module nyancat (
     /* verilator lint_on WIDTHEXPAND */
 
     // =========================================================================
-    // ROM Storage
+    // Memory Storage (abstracted interface for future bus protocol support)
     // =========================================================================
 
     // Frame data: 4-bit character indices (0-13) for all animation frames
     // Organized as: frame[0] (4096 entries), frame[1] (4096 entries), ..., frame[11]
-    reg [3:0] frame_mem[0:(NUM_FRAMES * FRAME_W * FRAME_H)-1];  // 49,152 × 4 bits = 24 KB
+    // Memory interface: ROM (current), future: Wishbone/AXI
+    reg [`FRAME_MEM_DATA_WIDTH-1:0] frame_mem[0:(NUM_FRAMES * FRAME_W * FRAME_H)-1];
 
     // Color palette: 14 VGA colors encoded as 6-bit RRGGBB
-    reg [5:0] color_mem[0:15];  // 16 entries (indices 14-15 unused)
+    // Memory interface: ROM (current), future: Wishbone/AXI
+    reg [`PALETTE_MEM_DATA_WIDTH-1:0] color_mem[0:15];
 
-    // Load pre-generated animation data from hex files
-    initial begin
-        $readmemh("nyancat-frames.hex", frame_mem);  // Character index arrays
-        $readmemh("nyancat-colors.hex", color_mem);  // Color palette lookup table
-    end
+    // Load pre-generated animation data using abstract memory interface
+    `MEM_INIT(frame_mem, "nyancat-frames.hex")
+    `MEM_INIT(color_mem, "nyancat-colors.hex")
 
     // =========================================================================
-    // 2-Stage Pipeline for ROM Read Latency
+    // 2-Stage Pipeline for Memory Read Latency
     // =========================================================================
-    // Pipeline is necessary because ROM reads require 1 clock cycle latency.
-    // Stage 1: Read character index from frame ROM using computed address
-    // Stage 2: Read final color from palette ROM using character index
+    // Pipeline is necessary because memory reads require 1 clock cycle latency.
+    // Stage 1: Read character index from frame memory using computed address
+    // Stage 2: Read final color from palette memory using character index
     // Both stages must propagate the in_display flag to maintain sync with data.
+    //
+    // Note: This pipeline structure remains compatible with future bus protocols
+    // (Wishbone/AXI) that also have 1-cycle read latency.
 
-    reg [3:0] char_idx_q;  // Stage 1 output: Character index
+    reg [`FRAME_MEM_DATA_WIDTH-1:0] char_idx_q;  // Stage 1 output: Character index
     reg in_display_q, in_display_q2;  // Display area flag pipelined through both stages
-    reg [5:0] color_q;  // Stage 2 output: Final color value
+    reg [`PALETTE_MEM_DATA_WIDTH-1:0] color_q;  // Stage 2 output: Final color value
 
-    // Pipeline datapath: ROM addressing → char lookup → color lookup
+    // Pipeline datapath: Memory addressing → char lookup → color lookup
     always @(posedge px_clk) begin
         if (reset) begin
             char_idx_q <= 0;
@@ -144,11 +150,11 @@ module nyancat (
             color_q <= 0;
             in_display_q2 <= 0;
         end else begin
-            // Stage 1: Fetch character index from frame ROM
-            char_idx_q <= frame_mem[frame_addr];
+            // Stage 1: Fetch character index using abstract memory interface
+            `MEM_READ(char_idx_q, frame_mem, frame_addr);
             in_display_q <= in_display;
-            // Stage 2: Fetch final color from palette ROM using character index
-            color_q <= color_mem[char_idx_q];
+            // Stage 2: Fetch final color using abstract memory interface
+            `MEM_READ(color_q, color_mem, char_idx_q);
             in_display_q2 <= in_display_q;
         end
     end
