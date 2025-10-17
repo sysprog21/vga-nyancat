@@ -1,12 +1,12 @@
 # VGA Nyancat
 
-Hardware-accelerated Nyancat (Pop-Tart Cat) animation on VGA display, implemented in
-Verilog RTL and simulated using Verilator. Features real-time hardware scaling, ROM-based
-animation storage, and a 2-stage rendering pipeline.
+Hardware-accelerated Nyancat (Pop-Tart Cat) animation on VGA display,
+implemented in Verilog RTL and simulated using [Verilator](https://verilator.org/).
+Features real-time hardware scaling, ROM-based animation storage, and a 2-stage rendering pipeline.
 
 Note: This is an educational hardware design project demonstrating VGA timing,
-ROM-based graphics, and hardware animation techniques. The Nyancat character and
-animation are used under fair use for educational purposes.
+ROM-based graphics, and hardware animation techniques.
+The Nyancat character and animation are used under fair use for educational purposes.
 
 ## Features
 
