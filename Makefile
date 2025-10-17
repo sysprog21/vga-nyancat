@@ -66,7 +66,7 @@ $(DATA_FILES): scripts/gen-nyancat.py $(NYANCAT_SRC)
 # Verilator compilation
 obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp $(RTL_DIR)/videomode.vh
 	@echo "Running Verilator (Video mode: $(VIDEO_MODE))..."
-	@verilator --quiet --cc $(SOURCES) \
+	@verilator --cc $(SOURCES) \
 	           --exe $(SIM_DIR)/main.cpp \
 	           --top-module vga_nyancat \
 	           --trace \
