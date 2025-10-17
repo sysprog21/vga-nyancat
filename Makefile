@@ -4,6 +4,11 @@ RTL_DIR = rtl
 SIM_DIR = sim
 OUT = build
 
+# Video mode selection (default: VGA 640×480 @ 72Hz)
+# Options: VGA_640x480_72, VGA_640x480_60, VGA_800x600_60, SVGA_800x600_72, XGA_1024x768_60
+VIDEO_MODE ?= VGA_640x480_72
+VMODE_DEFINE = -DVIDEO_MODE_$(VIDEO_MODE)
+
 # Nyancat upstream source
 NYANCAT_RAW_URL = https://raw.githubusercontent.com/klange/nyancat/master/src/animation.c
 NYANCAT_SRC = $(OUT)/animation.c
@@ -14,8 +19,9 @@ DATA_FILES = $(OUT)/nyancat-frames.hex $(OUT)/nyancat-colors.hex
 SIM_BINARY = $(OUT)/Vvga_nyancat
 
 VERILATOR_ROOT := $(shell verilator --getenv VERILATOR_ROOT)
-CFLAGS = -O3 -Iobj_dir -I$(VERILATOR_ROOT)/include $(shell sdl2-config --cflags)
+CFLAGS = -O3 -Iobj_dir -I$(VERILATOR_ROOT)/include $(shell sdl2-config --cflags) $(VMODE_DEFINE)
 LDFLAGS = $(shell sdl2-config --libs)
+VFLAGS = $(VMODE_DEFINE)
 
 # Formatting tools
 # Prefer system installation, fall back to local tools/ directory
@@ -58,11 +64,13 @@ $(DATA_FILES): scripts/gen-nyancat.py $(NYANCAT_SRC)
 	@echo "Generated $(OUT)/nyancat-frames.hex and $(OUT)/nyancat-colors.hex"
 
 # Verilator compilation
-obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp
-	@echo "Running Verilator..."
+obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp $(RTL_DIR)/videomode.vh
+	@echo "Running Verilator (Video mode: $(VIDEO_MODE))..."
 	@verilator --quiet --cc $(SOURCES) \
 	           --exe $(SIM_DIR)/main.cpp \
 	           --top-module vga_nyancat \
+	           -I$(RTL_DIR) \
+	           $(VFLAGS) \
 	           -CFLAGS "$(CFLAGS)" -LDFLAGS "$(LDFLAGS)"
 
 # Build simulation binary

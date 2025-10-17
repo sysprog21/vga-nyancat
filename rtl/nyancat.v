@@ -2,6 +2,10 @@
 // "LICENSE" for information on usage and redistribution of this file.
 
 `default_nettype none
+
+// Include parameterized video mode definitions
+`include "videomode.vh"
+
 // Nyancat Animation Display Module
 //
 // Hardware-accelerated Nyancat (Pop-Tart Cat) animation renderer with real-time
@@ -23,22 +27,22 @@
 // Data flow:
 //   {x_px, y_px} → coord transform → ROM address → char_idx → color → rrggbb
 module nyancat (
-    input  wire       px_clk,       // Pixel clock (31.5 MHz)
-    input  wire       reset,        // Synchronous reset
-    input  wire [9:0] x_px,
-    y_px,  // Current pixel coordinates [0,639]×[0,479]
-    input  wire       activevideo,  // High during active display region
-    output wire [5:0] rrggbb        // 6-bit VGA color output (2R2G2B)
+    input  wire                     px_clk,       // Pixel clock (mode-dependent)
+    input  wire                     reset,        // Synchronous reset
+    input  wire [X_COORD_WIDTH-1:0] x_px,         // Current pixel X [0, H_ACTIVE-1]
+    input  wire [Y_COORD_WIDTH-1:0] y_px,         // Current pixel Y [0, V_ACTIVE-1]
+    input  wire                     activevideo,  // High during active display region
+    output wire [              5:0] rrggbb        // 6-bit VGA color output (2R2G2B)
 );
     // =========================================================================
     // Configuration Parameters
     // =========================================================================
 
-    // Display geometry
+    // Display geometry (uses video mode parameters from videomode.vh)
     localparam FRAME_W = 64, FRAME_H = 64, SCALE = 8;  // Source size and scale factor
     localparam SCALED_W = FRAME_W * SCALE, SCALED_H = FRAME_H * SCALE;  // 512×512
-    localparam DISPLAY_W = 640, DISPLAY_H = 480;  // VGA resolution
-    localparam OFFSET_X = (DISPLAY_W - SCALED_W) / 2, OFFSET_Y = 0;  // Centering offsets
+    // Use H_ACTIVE and V_ACTIVE from videomode.vh instead of hardcoded values
+    localparam OFFSET_X = (H_ACTIVE - SCALED_W) / 2, OFFSET_Y = 0;  // Centering offsets
 
     // Animation timing
     localparam NUM_FRAMES = 12;  // Total animation frames
@@ -76,9 +80,11 @@ module nyancat (
     //   3. Calculate ROM address from frame index and source coordinates
 
     // Step 1: Remove centering offset to get coordinates relative to animation area
-    wire signed [10:0] rel_x_signed = $signed({1'b0, x_px}) - OFFSET_X;
-    wire signed [10:0] rel_y_signed = $signed({1'b0, y_px}) - OFFSET_Y;
-    wire [9:0] rel_x = rel_x_signed[9:0], rel_y = rel_y_signed[9:0];
+    // Use signed arithmetic with sufficient width to handle all video modes
+    wire signed [X_COORD_WIDTH:0] rel_x_signed = $signed({1'b0, x_px}) - OFFSET_X;
+    wire signed [Y_COORD_WIDTH:0] rel_y_signed = $signed({1'b0, y_px}) - OFFSET_Y;
+    wire [X_COORD_WIDTH-1:0] rel_x = rel_x_signed[X_COORD_WIDTH-1:0];
+    wire [Y_COORD_WIDTH-1:0] rel_y = rel_y_signed[Y_COORD_WIDTH-1:0];
 
     // Check if current pixel falls within the scaled animation display area
     /* verilator lint_off UNSIGNED */
@@ -87,8 +93,9 @@ module nyancat (
     /* verilator lint_on UNSIGNED */
 
     // Step 2: Descale coordinates (divide by 8) to map to source frame [0,63]
+    // Shift right by 3 bits (divide by 8) and take lower 6 bits for 64×64 frame
     /* verilator lint_off WIDTHTRUNC */
-    wire [5:0] src_x = rel_x[9:3], src_y = rel_y[9:3];  // Right shift 3 = divide by 8
+    wire [5:0] src_x = rel_x[8:3], src_y = rel_y[8:3];  // Right shift 3 = divide by 8
     /* verilator lint_on WIDTHTRUNC */
 
     // Step 3: Calculate ROM address using frame index and source coordinates

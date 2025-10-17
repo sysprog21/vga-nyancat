@@ -2,6 +2,10 @@
 // "LICENSE" for information on usage and redistribution of this file.
 
 `default_nettype none
+
+// Include parameterized video mode definitions
+`include "videomode.vh"
+
 // VGA Nyancat Display Top Module
 //
 // Top-level module that combines VGA timing generation with Nyancat animation
@@ -22,8 +26,9 @@ module vga_nyancat (
     output wire [5:0] rrggbb    // 6-bit color output (2R2G2B)
 );
     // Internal signals connecting sync generator to animation renderer
-    wire [9:0] x_px, y_px;  // Current pixel coordinates from sync generator
-    wire activevideo;  // High when in visible display region
+    wire [X_COORD_WIDTH-1:0] x_px;  // Current pixel X coordinate from sync generator
+    wire [Y_COORD_WIDTH-1:0] y_px;  // Current pixel Y coordinate from sync generator
+    wire                     activevideo;  // High when in visible display region
 
     // VGA timing generator: produces sync signals and pixel coordinates
     vga_sync_gen vga_sync (

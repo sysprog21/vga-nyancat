@@ -21,25 +21,53 @@
 #include "Vvga_nyancat.h"
 #include "verilated.h"
 
-// Display resolution (matches VGA active area)
-constexpr int H_RES = 640;
-constexpr int V_RES = 480;
+// Video mode configuration (must match RTL videomode.vh settings)
+// Default: VGA 640×480 @ 72Hz
+// To use different modes, define VIDEO_MODE_* in Makefile and recompile
 
-// VGA timing parameters (640x480@72Hz)
-// Total frame: 832 pixels/line × 520 lines = 432,640 clocks
-constexpr int H_FP = 24;    // Horizontal front porch
-constexpr int H_SYNC = 40;  // Horizontal sync pulse
-constexpr int H_BP = 128;   // Horizontal back porch
-constexpr int V_FP = 9;     // Vertical front porch
-constexpr int V_SYNC = 3;   // Vertical sync pulse
-constexpr int V_BP = 28;    // Vertical back porch
+#if !defined(VIDEO_MODE_VGA_640x480_72) &&  \
+    !defined(VIDEO_MODE_VGA_640x480_60) &&  \
+    !defined(VIDEO_MODE_VGA_800x600_60) &&  \
+    !defined(VIDEO_MODE_SVGA_800x600_72) && \
+    !defined(VIDEO_MODE_XGA_1024x768_60)
+// Default to VGA 640×480 @ 72Hz if no mode specified
+#define VIDEO_MODE_VGA_640x480_72
+#endif
+
+// Video mode timing parameters (must match videomode.vh)
+#if defined(VIDEO_MODE_VGA_640x480_72)
+constexpr int H_RES = 640, V_RES = 480;
+constexpr int H_FP = 24, H_SYNC = 40, H_BP = 128;
+constexpr int V_FP = 9, V_SYNC = 3, V_BP = 28;
+constexpr const char *MODE_NAME = "VGA 640x480 @ 72Hz";
+#elif defined(VIDEO_MODE_VGA_640x480_60)
+constexpr int H_RES = 640, V_RES = 480;
+constexpr int H_FP = 16, H_SYNC = 96, H_BP = 48;
+constexpr int V_FP = 10, V_SYNC = 2, V_BP = 33;
+constexpr const char *MODE_NAME = "VGA 640x480 @ 60Hz";
+#elif defined(VIDEO_MODE_VGA_800x600_60)
+constexpr int H_RES = 800, V_RES = 600;
+constexpr int H_FP = 40, H_SYNC = 128, H_BP = 88;
+constexpr int V_FP = 1, V_SYNC = 4, V_BP = 23;
+constexpr const char *MODE_NAME = "SVGA 800x600 @ 60Hz";
+#elif defined(VIDEO_MODE_SVGA_800x600_72)
+constexpr int H_RES = 800, V_RES = 600;
+constexpr int H_FP = 56, H_SYNC = 120, H_BP = 64;
+constexpr int V_FP = 37, V_SYNC = 6, V_BP = 23;
+constexpr const char *MODE_NAME = "SVGA 800x600 @ 72Hz";
+#elif defined(VIDEO_MODE_XGA_1024x768_60)
+constexpr int H_RES = 1024, V_RES = 768;
+constexpr int H_FP = 24, H_SYNC = 136, H_BP = 160;
+constexpr int V_FP = 3, V_SYNC = 6, V_BP = 29;
+constexpr const char *MODE_NAME = "XGA 1024x768 @ 60Hz";
+#endif
 
 // Computed timing values
-constexpr int H_BLANKING = H_FP + H_SYNC + H_BP;     // 192 pixels
-constexpr int V_BLANKING = V_FP + V_SYNC + V_BP;     // 40 lines
-constexpr int H_TOTAL = H_RES + H_BLANKING;          // 832 pixels
-constexpr int V_TOTAL = V_RES + V_BLANKING;          // 520 lines
-constexpr int CLOCKS_PER_FRAME = H_TOTAL * V_TOTAL;  // 432,640 clocks
+constexpr int H_BLANKING = H_FP + H_SYNC + H_BP;
+constexpr int V_BLANKING = V_FP + V_SYNC + V_BP;
+constexpr int H_TOTAL = H_RES + H_BLANKING;
+constexpr int V_TOTAL = V_RES + V_BLANKING;
+constexpr int CLOCKS_PER_FRAME = H_TOTAL * V_TOTAL;
 
 // Color conversion lookup table: 2-bit VGA channel → 8-bit RGB
 // Maps 2-bit color values to 8-bit with even spacing:
@@ -345,10 +373,14 @@ int main(int argc, char **argv)
 
     // Initialize SDL subsystem
     SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window *window =
-        SDL_CreateWindow("Nyancat - Verilator Simulation",
-                         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                         H_RES, V_RES, save_and_exit ? SDL_WINDOW_HIDDEN : 0);
+
+    // Create window title with video mode info
+    char window_title[128];
+    snprintf(window_title, sizeof(window_title), "Nyancat - %s", MODE_NAME);
+
+    SDL_Window *window = SDL_CreateWindow(
+        window_title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, H_RES,
+        V_RES, save_and_exit ? SDL_WINDOW_HIDDEN : 0);
 
     SDL_Renderer *renderer =
         SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);

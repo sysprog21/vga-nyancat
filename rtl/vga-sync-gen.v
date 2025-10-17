@@ -2,37 +2,40 @@
 // "LICENSE" for information on usage and redistribution of this file.
 
 `default_nettype none
-// VGA Sync Generator: 640×480 @ 72Hz
+
+// Include parameterized video mode definitions
+// Define VIDEO_MODE_* before synthesis to select different timing
+`include "videomode.vh"
+
+// VGA Sync Generator (Parameterized)
 //
 // Generates horizontal and vertical sync pulses plus pixel coordinates for
-// VESA standard VGA timing. Outputs are synchronized to the pixel clock.
+// VESA standard VGA timing. Supports multiple video modes through the
+// videomode.vh include file. Outputs are synchronized to the pixel clock.
 //
-// Timing specification:
-//   Horizontal: FP(24) + SYNC(40) + BP(128) + ACTIVE(640) = 832 px/line
-//   Vertical:   FP(9)  + SYNC(3)  + BP(28)  + ACTIVE(480) = 520 lines/frame
-//   Frame rate: 31.5 MHz / (832 × 520) = 72.016 Hz
+// Current mode timing (from videomode.vh):
+//   Horizontal: FP + SYNC + BP + ACTIVE = H_TOTAL px/line
+//   Vertical:   FP + SYNC + BP + ACTIVE = V_TOTAL lines/frame
 //
 // Sync signals are active-low. Pixel coordinates (x_px, y_px) are valid
 // only when activevideo is high.
 module vga_sync_gen (
-    input  wire       px_clk,      // Pixel clock (31.5 MHz)
-    input  wire       reset,       // Synchronous reset
-    output wire       hsync,       // Horizontal sync (active low)
-    output wire       vsync,       // Vertical sync (active low)
-    output reg  [9:0] x_px,        // Pixel X coordinate [0, 639]
-    output reg  [9:0] y_px,        // Pixel Y coordinate [0, 479]
-    output wire       activevideo  // High during visible display region
+    input  wire                     px_clk,      // Pixel clock (mode-dependent)
+    input  wire                     reset,       // Synchronous reset
+    output wire                     hsync,       // Horizontal sync (active low)
+    output wire                     vsync,       // Vertical sync (active low)
+    output reg  [X_COORD_WIDTH-1:0] x_px,        // Pixel X coordinate [0, H_ACTIVE-1]
+    output reg  [Y_COORD_WIDTH-1:0] y_px,        // Pixel Y coordinate [0, V_ACTIVE-1]
+    output wire                     activevideo  // High during visible display region
 );
-    // VGA timing parameters (VESA 640×480 @ 72Hz standard)
-    localparam H_FP = 24, H_SYNC = 40, H_BP = 128, H_ACTIVE = 640;  // Horizontal
-    localparam V_FP = 9, V_SYNC = 3, V_BP = 28, V_ACTIVE = 480;  // Vertical
-    localparam H_BLANK = H_FP + H_SYNC + H_BP;  // 192 px
-    localparam V_BLANK = V_FP + V_SYNC + V_BP;  // 40 lines
-    localparam H_TOTAL = H_BLANK + H_ACTIVE;  // 832 px
-    localparam V_TOTAL = V_BLANK + V_ACTIVE;  // 520 lines
+    // Video mode parameters imported from videomode.vh:
+    //   H_ACTIVE, H_FP, H_SYNC, H_BP, H_BLANK, H_TOTAL, H_COUNTER_WIDTH
+    //   V_ACTIVE, V_FP, V_SYNC, V_BP, V_BLANK, V_TOTAL, V_COUNTER_WIDTH
+    //   X_COORD_WIDTH, Y_COORD_WIDTH
 
     // Scanning position counters (include blanking intervals)
-    reg [9:0] hc, vc;  // hc: [0, 831], vc: [0, 519]
+    reg [H_COUNTER_WIDTH-1:0] hc;  // Horizontal counter: [0, H_TOTAL-1]
+    reg [V_COUNTER_WIDTH-1:0] vc;  // Vertical counter: [0, V_TOTAL-1]
 
     // Raster scanning: left-to-right, top-to-bottom with wraparound
     always @(posedge px_clk) begin
@@ -51,8 +54,10 @@ module vga_sync_gen (
                 vc <= (vc < V_TOTAL - 1) ? vc + 1 : 0;
             end
             // Pixel coordinates: subtract blanking offset (valid when activevideo=1)
-            x_px <= hc - H_BLANK;  // Valid range: [0, 639]
-            y_px <= vc - V_BLANK;  // Valid range: [0, 479]
+            /* verilator lint_off WIDTHTRUNC */
+            x_px <= hc - H_BLANK;  // Valid range: [0, H_ACTIVE-1]
+            y_px <= vc - V_BLANK;  // Valid range: [0, V_ACTIVE-1]
+            /* verilator lint_on WIDTHTRUNC */
         end
     end
 
