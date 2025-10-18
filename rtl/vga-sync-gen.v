@@ -180,7 +180,7 @@ module vga_sync_gen (
     wire [X_COORD_WIDTH-1:0] expected_x_px = hc_prev - H_BLANK;
     wire [Y_COORD_WIDTH-1:0] expected_y_px = vc_prev - V_BLANK;
     /* verilator lint_on WIDTHTRUNC */
-    /* verilator lint_off WIDTHTRUNC */
+
     always @(posedge px_clk)
         if (past_valid && !reset && !$past(reset)) begin
             if (x_px !== expected_x_px)
@@ -198,7 +198,6 @@ module vga_sync_gen (
                     vc_prev
                 );
         end
-    /* verilator lint_on WIDTHTRUNC */
 `endif
 
 endmodule

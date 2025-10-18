@@ -11,9 +11,8 @@
 
 // Nyancat Animation Display Module
 //
-// Hardware-accelerated Nyancat (Pop-Tart Cat) animation renderer with real-time
-// scaling and frame sequencing. Reads pre-compressed animation data from ROM
-// and outputs VGA-compatible color signals synchronized to pixel clock.
+// Reads pre-compressed animation data from ROM and outputs VGA-compatible color
+// signals synchronized to pixel clock.
 //
 // Architecture:
 //   - 12-frame animation stored as 64×64 4-bit character indices
@@ -47,8 +46,6 @@ module nyancat (
     // Auto-scale factor based on vertical resolution (maximize display size)
     // Target: use full vertical height while maintaining integer scaling
     localparam SCALE = V_ACTIVE / FRAME_H;  // Integer division for pixel-perfect scaling
-    localparam SCALE_SHIFT = $clog2(SCALE);  // Log2 of scale for bit shifting
-
     localparam SCALED_W = FRAME_W * SCALE, SCALED_H = FRAME_H * SCALE;
     // Use H_ACTIVE and V_ACTIVE from videomode.vh instead of hardcoded values
     localparam OFFSET_X = (H_ACTIVE - SCALED_W) / 2, OFFSET_Y = 0;  // Centering offsets

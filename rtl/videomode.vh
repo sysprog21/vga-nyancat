@@ -58,9 +58,6 @@
   localparam V_FP     = 9;
   localparam V_SYNC   = 3;
   localparam V_BP     = 28;
-
-  localparam PIXEL_CLK_MHZ = 31.5;  // MHz (for documentation/simulation)
-  localparam MODE_NAME = "VGA 640x480 @ 72Hz";
 `endif
 
 // ============================================================================
@@ -81,9 +78,6 @@
   localparam V_FP     = 10;
   localparam V_SYNC   = 2;
   localparam V_BP     = 33;
-
-  localparam PIXEL_CLK_MHZ = 25.175;
-  localparam MODE_NAME = "VGA 640x480 @ 60Hz";
 `endif
 
 // ============================================================================
@@ -104,9 +98,6 @@
   localparam V_FP     = 1;
   localparam V_SYNC   = 4;
   localparam V_BP     = 23;
-
-  localparam PIXEL_CLK_MHZ = 40.0;
-  localparam MODE_NAME = "SVGA 800x600 @ 60Hz";
 `endif
 
 // ============================================================================
@@ -127,9 +118,6 @@
   localparam V_FP     = 37;
   localparam V_SYNC   = 6;
   localparam V_BP     = 23;
-
-  localparam PIXEL_CLK_MHZ = 50.0;
-  localparam MODE_NAME = "SVGA 800x600 @ 72Hz";
 `endif
 
 // ============================================================================
@@ -150,9 +138,6 @@
   localparam V_FP     = 3;
   localparam V_SYNC   = 6;
   localparam V_BP     = 29;
-
-  localparam PIXEL_CLK_MHZ = 65.0;
-  localparam MODE_NAME = "XGA 1024x768 @ 60Hz";
 `endif
 
 // ============================================================================
