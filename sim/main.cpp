@@ -322,8 +322,7 @@ public:
 // Sync Signal State Validator: Glitch detection and phase-aware diagnostics
 //
 // Complements TimingMonitor by detecting single-cycle glitches and providing
-// detailed phase context for sync signal errors. Inspired by ZipCPU vgasim
-// Pattern 4.
+// detailed phase context for sync signal errors.
 //
 // Design principles:
 //   - Track estimated hc/vc position based on edge counts
@@ -521,6 +520,112 @@ public:
     }
 };
 
+// Coordinate Validator: Defense-in-depth bounds checking for framebuffer access
+//
+// Validates coordinates before every framebuffer write to prevent wild pointer
+// crashes. Complements RTL assertions with C++ side validation.
+//
+// Design principles:
+//   - Validate hpos/vpos against screen resolution before framebuffer access
+//   - Accumulate error count and auto-stop at threshold (10 errors)
+//   - Report errors with coordinate context for debugging
+//   - Silent after first frame to avoid spam
+class CoordinateValidator
+{
+private:
+    int error_count = 0;
+    bool silent_mode = false;
+    bool frame_complete = false;
+    static constexpr int ERROR_THRESHOLD = 10;
+
+public:
+    CoordinateValidator() = default;
+
+    // Validate coordinates before framebuffer access
+    // Returns true if coordinates are valid, false otherwise
+    bool validate(int hpos, int vpos, int row_base)
+    {
+        bool valid = true;
+
+        // Check horizontal bounds
+        if (hpos < 0 || hpos >= H_RES) {
+            if (!silent_mode && error_count < ERROR_THRESHOLD) {
+                fprintf(stderr,
+                        "[COORDINATE ERROR] hpos=%d out of bounds [0, %d)\n",
+                        hpos, H_RES);
+                error_count++;
+            }
+            valid = false;
+        }
+
+        // Check vertical bounds
+        if (vpos < 0 || vpos >= V_RES) {
+            if (!silent_mode && error_count < ERROR_THRESHOLD) {
+                fprintf(stderr,
+                        "[COORDINATE ERROR] vpos=%d out of bounds [0, %d)\n",
+                        vpos, V_RES);
+                error_count++;
+            }
+            valid = false;
+        }
+
+        // Check row_base consistency
+        // row_base should match (vpos * H_RES) << 2 when in valid range
+        if (vpos >= 0 && vpos < V_RES) {
+            int expected_row_base = (vpos * H_RES) << 2;
+            if (row_base != expected_row_base) {
+                if (!silent_mode && error_count < ERROR_THRESHOLD) {
+                    fprintf(stderr,
+                            "[COORDINATE ERROR] row_base mismatch: got %d, "
+                            "expected %d (vpos=%d)\n",
+                            row_base, expected_row_base, vpos);
+                    error_count++;
+                }
+                valid = false;
+            }
+        }
+
+        // Check if threshold exceeded
+        if (error_count >= ERROR_THRESHOLD) {
+            if (!silent_mode) {
+                fprintf(stderr,
+                        "[COORDINATE VALIDATOR] Error threshold reached (%d "
+                        "errors), stopping validation\n",
+                        ERROR_THRESHOLD);
+                silent_mode = true;
+            }
+        }
+
+        return valid;
+    }
+
+    // Mark frame completion (called on vsync)
+    void mark_frame_complete()
+    {
+        if (!frame_complete) {
+            frame_complete = true;
+            silent_mode = true;  // Only report errors from first frame
+        }
+    }
+
+    void report() const
+    {
+        if (error_count == 0) {
+            std::cout << "PASS: Coordinate validation (no bounds errors)\n";
+        } else {
+            std::cout << "FAIL: Coordinate validation\n";
+            std::cout << "   Total coordinate errors: " << error_count << "\n";
+            if (error_count >= ERROR_THRESHOLD) {
+                std::cout << "   (validation stopped at threshold)\n";
+            }
+        }
+    }
+
+    bool has_errors() const { return error_count > 0; }
+
+    int get_error_count() const { return error_count; }
+};
+
 // Standalone PNG encoder (no external dependencies)
 // Adapted from sysprog21/mado headless-ctl.c
 
@@ -706,13 +811,15 @@ void print_usage(const char *prog)
     std::cout
         << "Usage: " << prog << " [options]\n"
         << "Options:\n"
-        << "  --save-png <file>    Save single frame to PNG and exit\n"
-        << "  --trace <file.vcd>   Enable VCD waveform tracing for debugging\n"
-        << "  --trace-clocks <N>   Limit VCD trace to first N clock cycles "
+        << "  --save-png <file>       Save single frame to PNG and exit\n"
+        << "  --trace <file.vcd>      Enable VCD waveform tracing for "
+           "debugging\n"
+        << "  --trace-clocks <N>      Limit VCD trace to first N clock cycles "
            "(default: 1 frame)\n"
-        << "  --validate-timing    Enable real-time VGA timing validation\n"
-        << "  --validate-signals   Enable sync signal glitch detection\n"
-        << "  --help               Show this help\n\n"
+        << "  --validate-timing       Enable real-time VGA timing validation\n"
+        << "  --validate-signals      Enable sync signal glitch detection\n"
+        << "  --validate-coordinates  Enable coordinate bounds checking\n"
+        << "  --help                  Show this help\n\n"
         << "Interactive keys:\n"
         << "  p     - Save frame to test.png\n"
         << "  ESC   - Reset animation\n"
@@ -721,16 +828,21 @@ void print_usage(const char *prog)
         << "  Generate: ./Vvga_nyancat --trace waves.vcd --trace-clocks 10000\n"
         << "  View:     surfer waves.vcd  (or gtkwave waves.vcd)\n\n"
         << "Validation modes:\n"
-        << "  --validate-timing    Validates hsync/vsync pulse widths and "
+        << "  --validate-timing       Validates hsync/vsync pulse widths and "
            "frame "
            "dimensions\n"
-        << "                       Tolerates ±1 clock/line jitter for "
+        << "                          Tolerates ±1 clock/line jitter for "
            "real-world "
            "variations\n"
-        << "  --validate-signals   Detects glitches and validates sync signal "
+        << "  --validate-signals      Detects glitches and validates sync "
+           "signal "
            "state\n"
-        << "                       Phase-aware diagnostics with position "
-           "context\n";
+        << "                          Phase-aware diagnostics with position "
+           "context\n"
+        << "  --validate-coordinates  Defense-in-depth coordinate bounds "
+           "checking\n"
+        << "                          Prevents wild pointer crashes "
+           "(auto-stops at 10 errors)\n";
 }
 
 // Simulate VGA frame generation with performance optimizations
@@ -756,6 +868,8 @@ void print_usage(const char *prog)
 //
 // Timing validation:
 //   - If monitor is non-null, calls monitor->tick() each clock for validation
+//   - If coord_validator is non-null, validates coordinates before framebuffer
+//   writes
 inline void simulate_frame(Vvga_nyancat *top,
                            uint8_t *fb,
                            int &hpos,
@@ -764,7 +878,8 @@ inline void simulate_frame(Vvga_nyancat *top,
                            VerilatedVcdC *trace = nullptr,
                            vluint64_t *trace_time = nullptr,
                            TimingMonitor *monitor = nullptr,
-                           SyncValidator *validator = nullptr)
+                           SyncValidator *validator = nullptr,
+                           CoordinateValidator *coord_validator = nullptr)
 {
     // Precompute row base address for current row
     int row_base = (vpos >= 0 && vpos < V_RES) ? (vpos * H_RES) << 2 : -1;
@@ -795,19 +910,32 @@ inline void simulate_frame(Vvga_nyancat *top,
             hpos = -H_BP;
             vpos = -V_BP;
             row_base = -1;  // Reset row base (in blanking)
+            // Mark frame completion for coordinate validator
+            if (coord_validator)
+                coord_validator->mark_frame_complete();
         }
 
         // Fast path: skip processing during blanking intervals
         // Only process when in active display region
         if (row_base >= 0) {
             if (hpos >= 0 && hpos < H_RES) {
-                // Direct framebuffer write using precomputed row base
-                int idx = row_base + (hpos << 2);
-                uint8_t color = top->rrggbb;
-                fb[idx] = vga2bit_to_8bit(color & 0b11);             // B
-                fb[idx + 1] = vga2bit_to_8bit((color >> 2) & 0b11);  // G
-                fb[idx + 2] = vga2bit_to_8bit((color >> 4) & 0b11);  // R
-                fb[idx + 3] = 255;                                   // A
+                // Coordinate validation before framebuffer write
+                // (defense-in-depth)
+                bool coords_valid = true;
+                if (coord_validator)
+                    coords_valid =
+                        coord_validator->validate(hpos, vpos, row_base);
+
+                // Only update framebuffer if coordinates pass validation
+                if (coords_valid) {
+                    // Direct framebuffer write using precomputed row base
+                    int idx = row_base + (hpos << 2);
+                    uint8_t color = top->rrggbb;
+                    fb[idx] = vga2bit_to_8bit(color & 0b11);             // B
+                    fb[idx + 1] = vga2bit_to_8bit((color >> 2) & 0b11);  // G
+                    fb[idx + 2] = vga2bit_to_8bit((color >> 4) & 0b11);  // R
+                    fb[idx + 3] = 255;                                   // A
+                }
             }
         }
 
@@ -831,6 +959,7 @@ int main(int argc, char **argv)
     bool save_and_exit = false;
     bool validate_timing = false;
     bool validate_signals = false;
+    bool validate_coordinates = false;
     const char *output_file = "test.png";
     const char *trace_file = nullptr;
     int trace_clocks = CLOCKS_PER_FRAME;  // Default: 1 complete frame
@@ -848,6 +977,8 @@ int main(int argc, char **argv)
             validate_timing = true;
         } else if (strcmp(argv[i], "--validate-signals") == 0) {
             validate_signals = true;
+        } else if (strcmp(argv[i], "--validate-coordinates") == 0) {
+            validate_coordinates = true;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -942,6 +1073,15 @@ int main(int argc, char **argv)
         std::cout << "Glitch detection with phase-aware diagnostics\n";
     }
 
+    // Initialize coordinate validator if requested
+    CoordinateValidator *coord_validator = nullptr;
+    if (validate_coordinates) {
+        coord_validator = new CoordinateValidator();
+        std::cout << "Coordinate validation enabled\n";
+        std::cout
+            << "Defense-in-depth bounds checking (auto-stops at 10 errors)\n";
+    }
+
     bool quit = false;
 
     // Batch mode: generate one frame and exit
@@ -961,7 +1101,7 @@ int main(int argc, char **argv)
         }
 
         simulate_frame(top, fb_ptr, hpos, vpos, sim_clocks, trace, &trace_time,
-                       monitor, validator);
+                       monitor, validator, coord_validator);
         if (trace) {
             remaining_trace_clocks -= sim_clocks * 2;  // 2 edges per clock
         }
@@ -1004,7 +1144,7 @@ int main(int argc, char **argv)
         // Simulate in smaller chunks for responsive input
         // VCD tracing disabled in interactive mode (too much data)
         simulate_frame(top, fb_ptr, hpos, vpos, 50000, nullptr, nullptr,
-                       monitor, validator);
+                       monitor, validator, coord_validator);
 
         // Update display after each simulation chunk
         SDL_UpdateTexture(texture, nullptr, fb_ptr, H_RES * 4);
@@ -1028,6 +1168,11 @@ int main(int argc, char **argv)
     if (validator) {
         validator->report();
         delete validator;
+    }
+
+    if (coord_validator) {
+        coord_validator->report();
+        delete coord_validator;
     }
 
     if (trace) {
