@@ -65,7 +65,6 @@ $(DATA_FILES): scripts/gen-nyancat.py $(NYANCAT_SRC)
 
 # Verilator compilation
 obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp $(RTL_DIR)/videomode.vh
-	@echo "Running Verilator (Video mode: $(VIDEO_MODE))..."
 	@verilator --cc $(SOURCES) \
 	           --exe $(SIM_DIR)/main.cpp \
 	           --top-module vga_nyancat \
@@ -100,7 +99,26 @@ check: $(SIM_BINARY)
 	@echo "Verifying VGA timing..."
 	@python3 scripts/analyze-vcd.py $(OUT)/check.vcd --report $(OUT)/check-report.txt
 	@echo ""
-	@echo "✅ Verification complete: $(OUT)/test.png and $(OUT)/check-report.txt"
+	@echo "Verification complete: $(OUT)/test.png and $(OUT)/check-report.txt"
+
+# Profile rendering performance
+profile: $(SIM_BINARY)
+	@echo "Profiling rendering performance..."
+	@cd $(OUT) && ./Vvga_nyancat --save-png profile.png --profile-render --validate-timing
+	@echo ""
+	@echo "Profiling complete: $(OUT)/profile.png"
+
+# Profile with all validators enabled
+profile-full: $(SIM_BINARY)
+	@echo "Profiling with full validation suite..."
+	@cd $(OUT) && ./Vvga_nyancat --save-png profile-full.png \
+		--profile-render \
+		--validate-timing \
+		--validate-signals \
+		--validate-coordinates \
+		--track-changes
+	@echo ""
+	@echo "Full profiling complete: $(OUT)/profile-full.png"
 
 # Generate VCD waveform trace (10000 clock cycles)
 trace: $(SIM_BINARY)
@@ -158,4 +176,4 @@ indent:
 		exit 1; \
 	fi
 
-.PHONY: all build run check trace trace-full trace-view clean distclean regen-data indent
+.PHONY: all build run check profile profile-full trace trace-full trace-view clean distclean regen-data indent
