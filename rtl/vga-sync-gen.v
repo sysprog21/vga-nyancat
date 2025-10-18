@@ -67,5 +67,103 @@ module vga_sync_gen (
 
     // Active video flag: high only when both counters are in visible region
     assign activevideo = (hc >= H_BLANK && vc >= V_BLANK);
+
+    // =========================================================================
+    // Verification Assertions (Verilator simulation only)
+    // =========================================================================
+    // These assertions validate VGA timing generation correctness.
+    // Excluded from synthesis to avoid any hardware impact.
+
+`ifndef SYNTHESIS
+    // Track valid signal history for $past() function
+    reg past_valid = 0;
+    always @(posedge px_clk) past_valid <= 1;
+
+    // Assertion 1: Horizontal counter wraparound at H_TOTAL boundary
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset)) begin
+            if ($past(hc) == H_TOTAL - 1 && hc != 0)
+                $error("[ASSERTION FAILED] hc should wrap to 0 after H_TOTAL-1, got %0d", hc);
+            if ($past(hc) < H_TOTAL - 1 && hc != $past(hc) + 1)
+                $error(
+                    "[ASSERTION FAILED] hc should increment by 1, was %0d now %0d", $past(hc), hc
+                );
+        end
+
+    // Assertion 2: Vertical counter wraparound at V_TOTAL boundary
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset) && $past(hc) == H_TOTAL - 1) begin
+            if ($past(vc) == V_TOTAL - 1 && vc != 0)
+                $error("[ASSERTION FAILED] vc should wrap to 0 after V_TOTAL-1, got %0d", vc);
+            if ($past(vc) < V_TOTAL - 1 && vc != $past(vc) + 1)
+                $error(
+                    "[ASSERTION FAILED] vc should increment by 1, was %0d now %0d", $past(vc), vc
+                );
+        end
+
+    // Assertion 3: Counter bounds - should never exceed total values
+    always @(posedge px_clk)
+        if (!reset) begin
+            if (hc >= H_TOTAL) $error("[ASSERTION FAILED] hc=%0d exceeds H_TOTAL=%0d", hc, H_TOTAL);
+            if (vc >= V_TOTAL) $error("[ASSERTION FAILED] vc=%0d exceeds V_TOTAL=%0d", vc, V_TOTAL);
+        end
+
+    // Assertion 4: Hsync timing correctness
+    // hsync should be low only during [H_FP, H_FP+H_SYNC) range
+    always @(posedge px_clk)
+        if (!reset) begin
+            if (hc >= H_FP && hc < H_FP + H_SYNC) begin
+                if (hsync !== 0) $error("[ASSERTION FAILED] hsync should be low at hc=%0d", hc);
+            end else begin
+                if (hsync !== 1) $error("[ASSERTION FAILED] hsync should be high at hc=%0d", hc);
+            end
+        end
+
+    // Assertion 5: Vsync timing correctness
+    // vsync should be low only during [V_FP, V_FP+V_SYNC) range
+    always @(posedge px_clk)
+        if (!reset) begin
+            if (vc >= V_FP && vc < V_FP + V_SYNC) begin
+                if (vsync !== 0) $error("[ASSERTION FAILED] vsync should be low at vc=%0d", vc);
+            end else begin
+                if (vsync !== 1) $error("[ASSERTION FAILED] vsync should be high at vc=%0d", vc);
+            end
+        end
+
+    // Assertion 6: Activevideo timing correctness
+    // activevideo should be high only when both hc >= H_BLANK and vc >= V_BLANK
+    always @(posedge px_clk)
+        if (!reset) begin
+            if (hc >= H_BLANK && vc >= V_BLANK) begin
+                if (!activevideo)
+                    $error(
+                        "[ASSERTION FAILED] activevideo should be high at hc=%0d vc=%0d", hc, vc
+                    );
+            end else begin
+                if (activevideo)
+                    $error("[ASSERTION FAILED] activevideo should be low at hc=%0d vc=%0d", hc, vc);
+            end
+        end
+
+    // Assertion 7: Pixel coordinates validity during active video
+    // Note: x_px and y_px are registered (1-cycle delayed from hc/vc)
+    // Check against previous cycle's activevideo to account for timing
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset) && $past(activevideo)) begin
+            if (x_px >= H_ACTIVE)
+                $error(
+                    "[ASSERTION FAILED] x_px=%0d exceeds H_ACTIVE=%0d (prev activevideo)",
+                    x_px,
+                    H_ACTIVE
+                );
+            if (y_px >= V_ACTIVE)
+                $error(
+                    "[ASSERTION FAILED] y_px=%0d exceeds V_ACTIVE=%0d (prev activevideo)",
+                    y_px,
+                    V_ACTIVE
+                );
+        end
+`endif
+
 endmodule
 `default_nettype wire
