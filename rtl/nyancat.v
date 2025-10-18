@@ -280,6 +280,41 @@ module nyancat (
                     );
             end
         end
+
+    // Assertion 9: Coordinate transformation validity (defense-in-depth)
+    // When in_display=1, verify that coordinate transformations are correct:
+    // - src_x and src_y must be within [0, FRAME_W-1] and [0, FRAME_H-1]
+    // - rel_x and rel_y must be within [0, SCALED_W-1] and [0, SCALED_H-1]
+    // This prevents wild pointer crashes in framebuffer updates
+    /* verilator lint_off WIDTHEXPAND */
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset) && in_display) begin
+            if (src_x >= FRAME_W)
+                $error(
+                    "[ASSERTION FAILED] src_x=%0d exceeds FRAME_W=%0d (in_display=1)",
+                    src_x,
+                    FRAME_W
+                );
+            if (src_y >= FRAME_H)
+                $error(
+                    "[ASSERTION FAILED] src_y=%0d exceeds FRAME_H=%0d (in_display=1)",
+                    src_y,
+                    FRAME_H
+                );
+            if (rel_x >= SCALED_W)
+                $error(
+                    "[ASSERTION FAILED] rel_x=%0d exceeds SCALED_W=%0d (in_display=1)",
+                    rel_x,
+                    SCALED_W
+                );
+            if (rel_y >= SCALED_H)
+                $error(
+                    "[ASSERTION FAILED] rel_y=%0d exceeds SCALED_H=%0d (in_display=1)",
+                    rel_y,
+                    SCALED_H
+                );
+        end
+    /* verilator lint_on WIDTHEXPAND */
 `endif
 
 endmodule
