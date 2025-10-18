@@ -165,5 +165,124 @@ module nyancat (
     // the animation display area. Output black (6'b0) for all other pixels.
 
     assign rrggbb = (activevideo && in_display_q2) ? color_q : 6'b0;
+
+    // =========================================================================
+    // Verification Assertions (Verilator simulation only)
+    // =========================================================================
+    // These assertions validate critical design invariants during simulation.
+    // They are excluded from synthesis to avoid any hardware impact.
+
+`ifndef SYNTHESIS
+    // Track valid signal history for $past() function
+    reg past_valid = 0;
+    always @(posedge px_clk) past_valid <= 1;
+
+    // Assertion 1: Pipeline stage 1 propagates in_display correctly
+    // in_display_q should always match the previous cycle's in_display
+    // Guard with !$past(reset) to avoid false positives during reset release
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset)) begin
+            if (in_display_q !== $past(in_display))
+                $error("[ASSERTION FAILED] Pipeline stage 1: in_display_q mismatch");
+        end
+
+    // Assertion 2: Pipeline stage 2 propagates in_display_q correctly
+    // in_display_q2 should always match the previous cycle's in_display_q
+    // Guard with !$past(reset) to avoid false positives during reset release
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset)) begin
+            if (in_display_q2 !== $past(in_display_q))
+                $error("[ASSERTION FAILED] Pipeline stage 2: in_display_q2 mismatch");
+        end
+
+    // Assertion 3: Coordinate bounds check during active display
+    // Note: activevideo is combinational from vga_sync_gen, while x_px/y_px are registered
+    // Check against previous cycle's activevideo to account for timing skew
+    always @(posedge px_clk)
+        if (past_valid && !reset && $past(activevideo)) begin
+            if (x_px >= H_ACTIVE)
+                $error("[ASSERTION FAILED] x_px=%0d exceeds H_ACTIVE=%0d", x_px, H_ACTIVE);
+            if (y_px >= V_ACTIVE)
+                $error("[ASSERTION FAILED] y_px=%0d exceeds V_ACTIVE=%0d", y_px, V_ACTIVE);
+        end
+
+    // Assertion 4: Frame index must stay within valid range [0, 11]
+    always @(posedge px_clk)
+        if (!reset) begin
+            if (frame_index >= NUM_FRAMES)
+                $error(
+                    "[ASSERTION FAILED] frame_index=%0d exceeds NUM_FRAMES=%0d",
+                    frame_index,
+                    NUM_FRAMES
+                );
+        end
+
+    // Assertion 5: Character index should be valid (0-13) when in display
+    // Note: Index 14-15 are unused but not errors (palette has 16 entries)
+    // Guard with !$past(reset) and !$isunknown to avoid spurious warnings
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(
+                reset
+            ) && $past(
+                in_display
+            ) && !$isunknown(
+                char_idx_q
+            )) begin
+            if (char_idx_q > 13)
+                $warning(
+                    "[ASSERTION WARNING] char_idx_q=%0d uses reserved palette entry", char_idx_q
+                );
+        end
+
+    // Assertion 6: ROM address must stay within allocated memory bounds
+    // Check both current cycle (defensive) and previous cycle (actual ROM read timing)
+    always @(posedge px_clk)
+        if (!reset && in_display) begin
+            if (frame_addr >= NUM_FRAMES * FRAME_SIZE)
+                $error(
+                    "[ASSERTION FAILED] frame_addr=%0d exceeds ROM size=%0d",
+                    frame_addr,
+                    NUM_FRAMES * FRAME_SIZE
+                );
+        end
+
+    // Assertion 7: ROM address timing alignment (check at actual cycle of use)
+    // frame_addr from previous cycle is what gets read into char_idx_q this cycle
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset) && $past(in_display)) begin
+            if ($past(frame_addr) >= NUM_FRAMES * FRAME_SIZE)
+                $error(
+                    "[ASSERTION FAILED] ROM read with frame_addr=%0d exceeds size=%0d",
+                    $past(
+                        frame_addr
+                    ),
+                    NUM_FRAMES * FRAME_SIZE
+                );
+        end
+
+    // Assertion 8: Output alignment - verify rrggbb matches pipeline correctly
+    // When display is active, rrggbb should match previous color_q value
+    // When not active, rrggbb should be zero
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset)) begin
+            if ($past(activevideo) && $past(in_display_q2)) begin
+                if (rrggbb !== $past(color_q))
+                    $error(
+                        "[ASSERTION FAILED] Output misalignment: rrggbb=%h should match color_q=%h",
+                        rrggbb,
+                        $past(
+                            color_q
+                        )
+                    );
+            end else begin
+                if (rrggbb !== 6'b0)
+                    $error(
+                        "[ASSERTION FAILED] Output should be zero outside display, got rrggbb=%h",
+                        rrggbb
+                    );
+            end
+        end
+`endif
+
 endmodule
 `default_nettype wire
