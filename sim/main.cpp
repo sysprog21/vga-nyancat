@@ -891,6 +891,122 @@ public:
     static constexpr int get_tiles_y() { return TILES_Y; }
 };
 
+// Render Profiler: Quantify rendering efficiency and establish performance
+// baseline
+//
+// Tracks clock-level utilization to answer "How efficient is my design?"
+// Inspired by tt08-vga-donut's performance-oriented approach.
+//
+// Design principles:
+//   - Track every clock cycle during simulation
+//   - Classify clocks: blanking vs active vs rendered
+//   - Calculate utilization rates for performance analysis
+//   - Provide data-driven baseline for optimization decisions
+class RenderProfiler
+{
+private:
+    uint64_t total_clocks = 0;
+    uint64_t blank_clocks = 0;         // !activevideo
+    uint64_t active_black_clocks = 0;  // activevideo && (rrggbb == 0)
+    uint64_t rendered_clocks = 0;      // activevideo && (rrggbb != 0)
+    bool frame_complete = false;
+
+public:
+    RenderProfiler() = default;
+
+    // Track one clock cycle
+    // Call this for every pixel clock in the simulation
+    void tick(bool activevideo, uint8_t rrggbb)
+    {
+        total_clocks++;
+
+        if (!activevideo) {
+            blank_clocks++;
+        } else {
+            if (rrggbb == 0) {
+                active_black_clocks++;
+            } else {
+                rendered_clocks++;
+            }
+        }
+    }
+
+    // Mark frame completion (optional, for multi-frame statistics)
+    void mark_frame_complete() { frame_complete = true; }
+
+    void report() const
+    {
+        if (total_clocks == 0) {
+            std::cout << "Render Profiler: No clocks profiled\n";
+            return;
+        }
+
+        double blank_pct = (100.0 * blank_clocks) / total_clocks;
+        double active_black_pct = (100.0 * active_black_clocks) / total_clocks;
+        double rendered_pct = (100.0 * rendered_clocks) / total_clocks;
+        double total_active_pct = active_black_pct + rendered_pct;
+
+        std::cout << "\n========================================\n";
+        std::cout << "Render Performance Profile\n";
+        std::cout << "========================================\n\n";
+
+        std::cout << "Total clocks simulated: " << total_clocks << "\n\n";
+
+        std::cout << "Clock utilization breakdown:\n";
+        std::cout << "  Blanking:        " << blank_clocks << " clocks ("
+                  << blank_pct << "%)\n";
+        std::cout << "  Active (black):  " << active_black_clocks << " clocks ("
+                  << active_black_pct << "%)\n";
+        std::cout << "  Rendered pixels: " << rendered_clocks << " clocks ("
+                  << rendered_pct << "%)\n";
+        std::cout << "  ---\n";
+        std::cout << "  Total active:    "
+                  << (active_black_clocks + rendered_clocks) << " clocks ("
+                  << total_active_pct << "%)\n\n";
+
+        // Efficiency analysis
+        std::cout << "Efficiency metrics:\n";
+        std::cout << "  Render utilization:  " << rendered_pct
+                  << "% (pixels with content)\n";
+        std::cout << "  Active utilization:  " << total_active_pct
+                  << "% (activevideo=1)\n";
+        std::cout << "  Blanking overhead:   " << blank_pct
+                  << "% (sync + porches)\n\n";
+
+        // Expected vs measured for VGA 640×480 @ 72Hz
+        uint64_t expected_active = H_RES * V_RES;     // 640 × 480 = 307,200
+        uint64_t expected_total = H_TOTAL * V_TOTAL;  // 832 × 520 = 432,640
+        double theoretical_active_pct =
+            (100.0 * expected_active) / expected_total;
+
+        std::cout << "Theoretical limits (VGA " << H_RES << "×" << V_RES
+                  << "):\n";
+        std::cout << "  Max active: " << theoretical_active_pct << "% ("
+                  << expected_active << "/" << expected_total << " pixels)\n";
+        std::cout << "  Nyancat display area: 512×512 = 262,144 pixels ("
+                  << (100.0 * 262144 / expected_active) << "% of active)\n";
+        std::cout << "  Expected render rate: ~"
+                  << (100.0 * 262144 / expected_total)
+                  << "% of total clocks\n\n";
+
+        // Performance comparison
+        double actual_vs_theoretical = rendered_pct / theoretical_active_pct;
+        std::cout << "Performance vs theoretical:\n";
+        std::cout << "  Actual render / Max active: "
+                  << (actual_vs_theoretical * 100.0) << "%\n";
+
+        std::cout << "========================================\n";
+    }
+
+    uint64_t get_total_clocks() const { return total_clocks; }
+    uint64_t get_rendered_clocks() const { return rendered_clocks; }
+    double get_render_utilization() const
+    {
+        return total_clocks > 0 ? (100.0 * rendered_clocks) / total_clocks
+                                : 0.0;
+    }
+};
+
 // Standalone PNG encoder (no external dependencies)
 // Adapted from sysprog21/mado headless-ctl.c
 
@@ -1085,6 +1201,7 @@ void print_usage(const char *prog)
         << "  --validate-signals      Enable sync signal glitch detection\n"
         << "  --validate-coordinates  Enable coordinate bounds checking\n"
         << "  --track-changes         Enable frame-to-frame change tracking\n"
+        << "  --profile-render        Enable rendering performance profiling\n"
         << "  --help                  Show this help\n\n"
         << "Interactive keys:\n"
         << "  p     - Save frame to test.png\n"
@@ -1111,7 +1228,12 @@ void print_usage(const char *prog)
            "(auto-stops at 10 errors)\n"
         << "  --track-changes         Tracks pixel changes between frames\n"
         << "                          Reports change rate, dirty rectangles, "
-           "and statistics\n";
+           "and statistics\n"
+        << "  --profile-render        Quantifies clock-level rendering "
+           "efficiency\n"
+        << "                          Provides performance baseline for "
+           "optimization "
+           "decisions\n";
 }
 
 // Simulate VGA frame generation with performance optimizations
@@ -1140,6 +1262,8 @@ void print_usage(const char *prog)
 //   - If coord_validator is non-null, validates coordinates before framebuffer
 //   writes
 //   - If change_tracker is non-null, tracks frame changes on vsync falling edge
+//   - If profiler is non-null, tracks clock utilization for performance
+//   analysis
 inline void simulate_frame(Vvga_nyancat *top,
                            uint8_t *fb,
                            int &hpos,
@@ -1150,7 +1274,8 @@ inline void simulate_frame(Vvga_nyancat *top,
                            TimingMonitor *monitor = nullptr,
                            SyncValidator *validator = nullptr,
                            CoordinateValidator *coord_validator = nullptr,
-                           ChangeTracker *change_tracker = nullptr)
+                           ChangeTracker *change_tracker = nullptr,
+                           RenderProfiler *profiler = nullptr)
 {
     // Precompute row base address for current row
     int row_base = (vpos >= 0 && vpos < V_RES) ? (vpos * H_RES) << 2 : -1;
@@ -1178,6 +1303,10 @@ inline void simulate_frame(Vvga_nyancat *top,
         // Sync signal validation on rising edge
         if (validator)
             validator->tick(top->hsync, top->vsync);
+
+        // Performance profiling on rising edge
+        if (profiler)
+            profiler->tick(top->activevideo, top->rrggbb);
 
         // Detect frame end: vsync rising edge (end of vertical sync pulse)
         // This marks completion of frame rendering, trigger change tracking
@@ -1241,6 +1370,7 @@ int main(int argc, char **argv)
     bool validate_signals = false;
     bool validate_coordinates = false;
     bool track_changes = false;
+    bool profile_render = false;
     const char *output_file = "test.png";
     const char *trace_file = nullptr;
     int trace_clocks = CLOCKS_PER_FRAME;  // Default: 1 complete frame
@@ -1262,6 +1392,8 @@ int main(int argc, char **argv)
             validate_coordinates = true;
         } else if (strcmp(argv[i], "--track-changes") == 0) {
             track_changes = true;
+        } else if (strcmp(argv[i], "--profile-render") == 0) {
+            profile_render = true;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -1374,6 +1506,15 @@ int main(int argc, char **argv)
             << "Tracking pixel-level changes between consecutive frames\n";
     }
 
+    // Initialize render profiler if requested
+    RenderProfiler *profiler = nullptr;
+    if (profile_render) {
+        profiler = new RenderProfiler();
+        std::cout << "Render performance profiling enabled\n";
+        std::cout
+            << "Clock-level utilization tracking for performance analysis\n";
+    }
+
     bool quit = false;
 
     // Batch mode: generate one frame and exit
@@ -1393,7 +1534,8 @@ int main(int argc, char **argv)
         }
 
         simulate_frame(top, fb_ptr, hpos, vpos, sim_clocks, trace, &trace_time,
-                       monitor, validator, coord_validator, change_tracker);
+                       monitor, validator, coord_validator, change_tracker,
+                       profiler);
         if (trace) {
             remaining_trace_clocks -= sim_clocks * 2;  // 2 edges per clock
         }
@@ -1436,7 +1578,8 @@ int main(int argc, char **argv)
         // Simulate in smaller chunks for responsive input
         // VCD tracing disabled in interactive mode (too much data)
         simulate_frame(top, fb_ptr, hpos, vpos, 50000, nullptr, nullptr,
-                       monitor, validator, coord_validator, change_tracker);
+                       monitor, validator, coord_validator, change_tracker,
+                       profiler);
 
         // Update display after each simulation chunk
         SDL_UpdateTexture(texture, nullptr, fb_ptr, H_RES * 4);
@@ -1470,6 +1613,11 @@ int main(int argc, char **argv)
     if (change_tracker) {
         change_tracker->report();
         delete change_tracker;
+    }
+
+    if (profiler) {
+        profiler->report();
+        delete profiler;
     }
 
     if (trace) {
