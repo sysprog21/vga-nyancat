@@ -19,16 +19,16 @@
 // External interface uses active-low reset (reset_n) but internal modules
 // use active-high reset for consistency with typical HDL practice.
 module vga_nyancat (
-    input  wire       clk,      // Pixel clock (31.5 MHz)
-    input  wire       reset_n,  // Active-low reset
-    output wire       hsync,    // Horizontal sync to VGA display
-    output wire       vsync,    // Vertical sync to VGA display
-    output wire [5:0] rrggbb    // 6-bit color output (2R2G2B)
+    input  wire       clk,          // Pixel clock (31.5 MHz)
+    input  wire       reset_n,      // Active-low reset
+    output wire       hsync,        // Horizontal sync to VGA display
+    output wire       vsync,        // Vertical sync to VGA display
+    output wire       activevideo,  // High when in visible display region
+    output wire [5:0] rrggbb        // 6-bit color output (2R2G2B)
 );
     // Internal signals connecting sync generator to animation renderer
     wire [X_COORD_WIDTH-1:0] x_px;  // Current pixel X coordinate from sync generator
     wire [Y_COORD_WIDTH-1:0] y_px;  // Current pixel Y coordinate from sync generator
-    wire                     activevideo;  // High when in visible display region
 
     // VGA timing generator: produces sync signals and pixel coordinates
     vga_sync_gen vga_sync (

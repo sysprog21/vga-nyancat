@@ -82,6 +82,243 @@ constexpr uint8_t vga2bit_to_8bit(uint8_t val)
     return val * 85;  // Compiler optimizes to shift+add
 }
 
+// VGA Timing Monitor: Real-time validation of sync signals and frame dimensions
+//
+// Edge-detection based measurement:
+//   - Hsync pulse width measured in clocks (falling edge to rising edge)
+//   - Vsync pulse width measured in lines (counted via hsync falling edges)
+//   - H_TOTAL/V_TOTAL measured from falling edge to falling edge
+//   - Active video dimensions tracked separately
+//
+// Design principles:
+//   - Skip first incomplete periods (use hsync_seen/vsync_seen flags)
+//   - Tolerance: ±1 clock/line for jitter handling
+//   - Validate at edge boundaries (avoid continuous counting errors)
+//   - Silent mode: only report first frame errors (avoid spam)
+class TimingMonitor
+{
+private:
+    const int expected_h_sync = H_SYNC, expected_v_sync = V_SYNC;
+    const int expected_h_total = H_TOTAL, expected_v_total = V_TOTAL;
+    const int expected_h_active = H_RES, expected_v_active = V_RES;
+
+    int h_counter = 0, v_counter = 0;
+    int hsync_pulse_width = 0, vsync_pulse_lines = 0;
+    int h_active_width = 0, v_active_lines = 0;
+    bool prev_hsync = true, prev_vsync = true;
+    bool in_hsync_pulse = false, in_vsync_pulse = false;
+    bool hsync_seen = false, vsync_seen = false;
+    bool frame_complete = false, first_sample = true;
+
+    int hsync_errors = 0, vsync_errors = 0;
+    int h_total_errors = 0, v_total_errors = 0;
+    int h_active_errors = 0, v_active_errors = 0;
+    bool silent_mode = false;
+
+    static constexpr int TOLERANCE = 1;
+
+    bool within_tolerance(int measured, int expected)
+    {
+        return (measured >= expected - TOLERANCE &&
+                measured <= expected + TOLERANCE);
+    }
+
+public:
+    TimingMonitor() = default;
+
+    void tick(bool hsync, bool vsync, bool activevideo)
+    {
+        // Handle first sample to initialize prev_* from actual signals.
+        // Avoids spurious falling edge detection if signals start low
+        if (first_sample) {
+            prev_hsync = hsync;
+            prev_vsync = vsync;
+            first_sample = false;
+            return;
+        }
+
+        // Detect edges up front for clear logic flow
+        bool h_fall = !hsync && prev_hsync;
+        bool h_rise = hsync && !prev_hsync;
+        bool v_fall = !vsync && prev_vsync;
+        bool v_rise = vsync && !prev_vsync;
+
+        // Process vsync edges FIRST (before hsync to avoid off-by-one)
+        if (v_fall) {
+            if (vsync_seen) {
+                // Validate previous complete frame
+                if (!within_tolerance(v_counter, expected_v_total)) {
+                    if (!silent_mode) {
+                        fprintf(
+                            stderr,
+                            "WARNING: Vertical total error: measured %d lines, "
+                            "expected %d (+-%d)\n",
+                            v_counter, expected_v_total, TOLERANCE);
+                    }
+                    v_total_errors++;
+                }
+
+                // Check active lines count
+                if (v_active_lines > 0) {
+                    if (!within_tolerance(v_active_lines, expected_v_active)) {
+                        if (!silent_mode) {
+                            fprintf(stderr,
+                                    "WARNING: Active video lines error: "
+                                    "measured %d "
+                                    "lines, expected %d (+-%d)\n",
+                                    v_active_lines, expected_v_active,
+                                    TOLERANCE);
+                        }
+                        v_active_errors++;
+                    }
+                }
+
+                frame_complete = true;
+                silent_mode = true;  // Only report errors from first frame
+            } else {
+                vsync_seen = true;
+            }
+
+            // Reset frame counters
+            v_counter = 0;
+            v_active_lines = 0;
+            in_vsync_pulse = true;
+            vsync_pulse_lines = 0;
+        }
+
+        if (v_rise) {
+            in_vsync_pulse = false;
+            if (vsync_seen &&
+                !within_tolerance(vsync_pulse_lines, expected_v_sync)) {
+                if (!silent_mode) {
+                    fprintf(
+                        stderr,
+                        "WARNING: Vsync pulse width error: measured %d lines, "
+                        "expected %d (+-%d)\n",
+                        vsync_pulse_lines, expected_v_sync, TOLERANCE);
+                }
+                vsync_errors++;
+            }
+        }
+
+        // Process hsync edges SECOND (after vsync validation)
+        if (h_fall) {
+            if (hsync_seen) {
+                // Validate previous complete line
+                if (!within_tolerance(h_counter, expected_h_total)) {
+                    if (!silent_mode) {
+                        fprintf(stderr,
+                                "WARNING: Horizontal total error: measured %d "
+                                "clocks, expected %d (+-%d)\n",
+                                h_counter, expected_h_total, TOLERANCE);
+                    }
+                    h_total_errors++;
+                }
+
+                // Check active video width
+                if (h_active_width > 0) {
+                    if (!within_tolerance(h_active_width, expected_h_active)) {
+                        if (!silent_mode) {
+                            fprintf(stderr,
+                                    "WARNING: Active video width error: "
+                                    "measured %d "
+                                    "pixels, expected %d (+-%d)\n",
+                                    h_active_width, expected_h_active,
+                                    TOLERANCE);
+                        }
+                        h_active_errors++;
+                    }
+                }
+
+                // Increment line counters (safe now that vsync validated first)
+                v_counter++;
+                if (h_active_width > 0)
+                    v_active_lines++;
+
+                // Count vsync pulse width using current vsync state
+                if (!vsync)
+                    vsync_pulse_lines++;
+            } else {
+                hsync_seen = true;
+            }
+
+            // Reset line counters
+            h_counter = 0;
+            h_active_width = 0;
+            in_hsync_pulse = true;
+            hsync_pulse_width = 0;
+        }
+
+        if (h_rise) {
+            in_hsync_pulse = false;
+            if (hsync_seen &&
+                !within_tolerance(hsync_pulse_width, expected_h_sync)) {
+                if (!silent_mode) {
+                    fprintf(
+                        stderr,
+                        "WARNING: Hsync pulse width error: measured %d clocks, "
+                        "expected %d (+-%d)\n",
+                        hsync_pulse_width, expected_h_sync, TOLERANCE);
+                }
+                hsync_errors++;
+            }
+        }
+
+        // Increment per-cycle counters LAST (after edge processing)
+        h_counter++;
+        if (!hsync)
+            hsync_pulse_width++;
+        if (activevideo)
+            h_active_width++;
+
+        // Update previous states
+        prev_hsync = hsync;
+        prev_vsync = vsync;
+    }
+
+    void report()
+    {
+        if (!frame_complete) {
+            std::cout << "WARNING: Timing validation incomplete (no full frame "
+                         "measured)\n";
+            return;
+        }
+
+        // Include active video errors in report
+        if (hsync_errors == 0 && vsync_errors == 0 && h_total_errors == 0 &&
+            v_total_errors == 0 && h_active_errors == 0 &&
+            v_active_errors == 0) {
+            std::cout << "PASS: VGA timing validation\n";
+            std::cout
+                << "   All sync pulse widths and frame dimensions correct\n";
+        } else {
+            std::cout << "FAIL: VGA timing validation\n";
+            if (hsync_errors > 0)
+                std::cout << "   Hsync errors: " << hsync_errors << "\n";
+            if (vsync_errors > 0)
+                std::cout << "   Vsync errors: " << vsync_errors << "\n";
+            if (h_total_errors > 0)
+                std::cout << "   H_TOTAL errors: " << h_total_errors << "\n";
+            if (v_total_errors > 0)
+                std::cout << "   V_TOTAL errors: " << v_total_errors << "\n";
+            if (h_active_errors > 0)
+                std::cout << "   H_ACTIVE errors: " << h_active_errors << "\n";
+            if (v_active_errors > 0)
+                std::cout << "   V_ACTIVE errors: " << v_active_errors << "\n";
+        }
+    }
+
+    bool has_errors() const
+    {
+        // Include active video errors in failure detection
+        return (hsync_errors > 0 || vsync_errors > 0 || h_total_errors > 0 ||
+                v_total_errors > 0 || h_active_errors > 0 ||
+                v_active_errors > 0);
+    }
+
+    bool is_complete() const { return frame_complete; }
+};
+
 // Standalone PNG encoder (no external dependencies)
 // Adapted from sysprog21/mado headless-ctl.c
 
@@ -271,6 +508,7 @@ void print_usage(const char *prog)
         << "  --trace <file.vcd>  Enable VCD waveform tracing for debugging\n"
         << "  --trace-clocks <N>  Limit VCD trace to first N clock cycles "
            "(default: 1 frame)\n"
+        << "  --validate-timing   Enable real-time VGA timing validation\n"
         << "  --help              Show this help\n\n"
         << "Interactive keys:\n"
         << "  p     - Save frame to test.png\n"
@@ -278,7 +516,11 @@ void print_usage(const char *prog)
         << "  q     - Quit\n\n"
         << "VCD waveform analysis:\n"
         << "  Generate: ./Vvga_nyancat --trace waves.vcd --trace-clocks 10000\n"
-        << "  View:     surfer waves.vcd  (or gtkwave waves.vcd)\n";
+        << "  View:     surfer waves.vcd  (or gtkwave waves.vcd)\n\n"
+        << "Timing validation:\n"
+        << "  Enable: ./Vvga_nyancat --validate-timing\n"
+        << "  Validates hsync/vsync pulse widths and frame dimensions\n"
+        << "  Tolerates ±1 clock/line jitter for real-world variations\n";
 }
 
 // Simulate VGA frame generation with performance optimizations
@@ -301,13 +543,17 @@ void print_usage(const char *prog)
 // VCD tracing:
 //   - If trace is non-null, records all signal changes to VCD file
 //   - trace_time: simulation time counter (incremented per clock edge)
+//
+// Timing validation:
+//   - If monitor is non-null, calls monitor->tick() each clock for validation
 inline void simulate_frame(Vvga_nyancat *top,
                            uint8_t *fb,
                            int &hpos,
                            int &vpos,
                            int clocks,
                            VerilatedVcdC *trace = nullptr,
-                           vluint64_t *trace_time = nullptr)
+                           vluint64_t *trace_time = nullptr,
+                           TimingMonitor *monitor = nullptr)
 {
     // Precompute row base address for current row
     int row_base = (vpos >= 0 && vpos < V_RES) ? (vpos * H_RES) << 2 : -1;
@@ -317,15 +563,17 @@ inline void simulate_frame(Vvga_nyancat *top,
         // Both edges need eval() for correct state propagation
         top->clk = 0;
         top->eval();
-        if (trace && trace_time) {
+        if (trace && trace_time)
             trace->dump((*trace_time)++);
-        }
 
         top->clk = 1;
         top->eval();
-        if (trace && trace_time) {
+        if (trace && trace_time)
             trace->dump((*trace_time)++);
-        }
+
+        // Timing validation on rising edge (after eval)
+        if (monitor)
+            monitor->tick(top->hsync, top->vsync, top->activevideo);
 
         // Detect frame start: both syncs go low simultaneously during vsync
         if (!top->hsync && !top->vsync) {
@@ -366,6 +614,7 @@ inline void simulate_frame(Vvga_nyancat *top,
 int main(int argc, char **argv)
 {
     bool save_and_exit = false;
+    bool validate_timing = false;
     const char *output_file = "test.png";
     const char *trace_file = nullptr;
     int trace_clocks = CLOCKS_PER_FRAME;  // Default: 1 complete frame
@@ -379,6 +628,8 @@ int main(int argc, char **argv)
             trace_file = argv[++i];
         } else if (strcmp(argv[i], "--trace-clocks") == 0 && i + 1 < argc) {
             trace_clocks = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--validate-timing") == 0) {
+            validate_timing = true;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -455,20 +706,36 @@ int main(int argc, char **argv)
     int hpos = -H_BP;
     int vpos = -V_BP;
 
+    // Initialize timing monitor if requested
+    TimingMonitor *monitor = nullptr;
+    if (validate_timing) {
+        monitor = new TimingMonitor();
+        std::cout << "VGA timing validation enabled\n";
+        std::cout << "Expected timing: H_TOTAL=" << H_TOTAL
+                  << " V_TOTAL=" << V_TOTAL << " H_SYNC=" << H_SYNC
+                  << " V_SYNC=" << V_SYNC << "\n";
+    }
+
     bool quit = false;
 
     // Batch mode: generate one frame and exit
     if (save_and_exit) {
         // Simulate exactly one complete frame
-        // Enable tracing for batch mode if requested
+        // For timing validation, simulate extra lines to ensure second vsync
+        // edge
         int sim_clocks = CLOCKS_PER_FRAME;
+        if (validate_timing) {
+            // Add extra lines to ensure we see second vsync falling edge
+            sim_clocks += H_TOTAL * (V_FP + V_SYNC + 1);
+        }
         if (trace && remaining_trace_clocks > 0) {
-            sim_clocks = (remaining_trace_clocks < CLOCKS_PER_FRAME)
+            sim_clocks = (remaining_trace_clocks < sim_clocks)
                              ? remaining_trace_clocks
-                             : CLOCKS_PER_FRAME;
+                             : sim_clocks;
         }
 
-        simulate_frame(top, fb_ptr, hpos, vpos, sim_clocks, trace, &trace_time);
+        simulate_frame(top, fb_ptr, hpos, vpos, sim_clocks, trace, &trace_time,
+                       monitor);
         if (trace) {
             remaining_trace_clocks -= sim_clocks * 2;  // 2 edges per clock
         }
@@ -479,6 +746,7 @@ int main(int argc, char **argv)
         SDL_RenderPresent(renderer);
         save_framebuffer_png(output_file, framebuffer, H_RES, V_RES);
         std::cout << "Saved frame to " << output_file << std::endl;
+
         quit = true;
     }
 
@@ -509,15 +777,28 @@ int main(int argc, char **argv)
 
         // Simulate in smaller chunks for responsive input
         // VCD tracing disabled in interactive mode (too much data)
-        simulate_frame(top, fb_ptr, hpos, vpos, 50000, nullptr, nullptr);
+        simulate_frame(top, fb_ptr, hpos, vpos, 50000, nullptr, nullptr,
+                       monitor);
 
         // Update display after each simulation chunk
         SDL_UpdateTexture(texture, nullptr, fb_ptr, H_RES * 4);
         SDL_RenderCopy(renderer, texture, nullptr, nullptr);
         SDL_RenderPresent(renderer);
+
+        // Check if timing validation is complete
+        if (monitor && monitor->is_complete()) {
+            monitor->report();
+            delete monitor;
+            monitor = nullptr;  // Only report once
+        }
     }
 
-    // Cleanup
+    // Cleanup and final reports
+    if (monitor) {
+        monitor->report();
+        delete monitor;
+    }
+
     if (trace) {
         trace->close();
         delete trace;
