@@ -16,7 +16,7 @@ NYANCAT_SRC = $(OUT)/animation.c
 # Nyancat display sources
 SOURCES = $(RTL_DIR)/vga-sync-gen.v $(RTL_DIR)/nyancat.v $(RTL_DIR)/vga-nyancat.v
 DATA_FILES = $(OUT)/nyancat-frames.hex $(OUT)/nyancat-colors.hex
-SIM_BINARY = $(OUT)/Vvga_nyancat
+SIMULATOR = $(OUT)/sim
 
 VERILATOR_ROOT := $(shell verilator --getenv VERILATOR_ROOT)
 CFLAGS = -O3 -Iobj_dir -I$(VERILATOR_ROOT)/include $(shell sdl2-config --cflags) $(VMODE_DEFINE)
@@ -29,7 +29,7 @@ VERIBLE_FORMAT ?= $(shell command -v verible-verilog-format 2>/dev/null || \
                            find tools -name verible-verilog-format -type f 2>/dev/null | head -1)
 CLANG_FORMAT ?= clang-format
 
-all: $(SIM_BINARY) $(DATA_FILES)
+all: $(SIMULATOR) $(DATA_FILES)
 
 # Download upstream nyancat source
 $(NYANCAT_SRC):
@@ -74,25 +74,25 @@ obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp $(RTL_DIR)/videomode.vh
 	           -CFLAGS "$(CFLAGS)" -LDFLAGS "$(LDFLAGS)" 2>&1 | grep -v "V e r i l a t i o n" | grep -v "Verilator:" || true
 
 # Build simulation binary
-$(SIM_BINARY): obj_dir/Vvga_nyancat.mk $(DATA_FILES)
+$(SIMULATOR): obj_dir/Vvga_nyancat.mk $(DATA_FILES)
 	@echo "Building simulation..."
 	@mkdir -p $(OUT)
 	@cd obj_dir && $(MAKE) -f Vvga_nyancat.mk
-	@cp obj_dir/Vvga_nyancat $(SIM_BINARY)
+	@cp obj_dir/Vvga_nyancat $(SIMULATOR)
 
 # Convenience target for building without running
-build: $(SIM_BINARY)
-	@echo "Build complete: $(SIM_BINARY)"
+build: $(SIMULATOR)
+	@echo "Build complete: $(SIMULATOR)"
 
 # Run interactive simulation
-run: $(SIM_BINARY)
+run: $(SIMULATOR)
 	@echo "Starting VGA Nyancat simulation..."
-	@cd $(OUT) && ./Vvga_nyancat
+	@cd $(OUT) && ./sim
 
 # Generate test image and verify timing
-check: $(SIM_BINARY)
+check: $(SIMULATOR)
 	@echo "Running verification (image + timing analysis)..."
-	@cd $(OUT) && ./Vvga_nyancat --save-png test.png --trace check.vcd --trace-clocks 10000
+	@cd $(OUT) && ./sim --save-png test.png --trace check.vcd --trace-clocks 10000
 	@echo "Generated $(OUT)/test.png"
 	@ls -lh $(OUT)/test.png
 	@echo ""
@@ -102,16 +102,16 @@ check: $(SIM_BINARY)
 	@echo "Verification complete: $(OUT)/test.png and $(OUT)/check-report.txt"
 
 # Profile rendering performance
-profile: $(SIM_BINARY)
+profile: $(SIMULATOR)
 	@echo "Profiling rendering performance..."
-	@cd $(OUT) && ./Vvga_nyancat --save-png profile.png --profile-render --validate-timing
+	@cd $(OUT) && ./sim --save-png profile.png --profile-render --validate-timing
 	@echo ""
 	@echo "Profiling complete: $(OUT)/profile.png"
 
 # Profile with all validators enabled
-profile-full: $(SIM_BINARY)
+profile-full: $(SIMULATOR)
 	@echo "Profiling with full validation suite..."
-	@cd $(OUT) && ./Vvga_nyancat --save-png profile-full.png \
+	@cd $(OUT) && ./sim --save-png profile-full.png \
 		--profile-render \
 		--validate-timing \
 		--validate-signals \
@@ -121,17 +121,17 @@ profile-full: $(SIM_BINARY)
 	@echo "Full profiling complete: $(OUT)/profile-full.png"
 
 # Generate VCD waveform trace (10000 clock cycles)
-trace: $(SIM_BINARY)
+trace: $(SIMULATOR)
 	@echo "Generating VCD waveform trace..."
-	@cd $(OUT) && ./Vvga_nyancat --save-png test.png --trace waves.vcd --trace-clocks 10000
+	@cd $(OUT) && ./sim --save-png test.png --trace waves.vcd --trace-clocks 10000
 	@echo "Generated $(OUT)/waves.vcd"
 	@ls -lh $(OUT)/waves.vcd
 	@echo "View with: surfer $(OUT)/waves.vcd"
 
 # Generate full frame VCD trace (warning: large file)
-trace-full: $(SIM_BINARY)
+trace-full: $(SIMULATOR)
 	@echo "Generating full frame VCD trace (this may take a while)..."
-	@cd $(OUT) && ./Vvga_nyancat --save-png test.png --trace waves-full.vcd --trace-clocks $(shell echo $$((832 * 520)))
+	@cd $(OUT) && ./sim --save-png test.png --trace waves-full.vcd --trace-clocks $(shell echo $$((832 * 520)))
 	@echo "Generated $(OUT)/waves-full.vcd"
 	@ls -lh $(OUT)/waves-full.vcd
 
