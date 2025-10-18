@@ -626,6 +626,271 @@ public:
     int get_error_count() const { return error_count; }
 };
 
+// Change Tracker: Frame-to-frame difference detection for rendering
+// optimization
+//
+// Tracks pixel changes between consecutive frames to identify dirty regions.
+// Useful for optimized incremental rendering and bandwidth analysis.
+//
+// Design principles:
+//   - Compare current frame against previous frame (full BGRA pixel comparison)
+//   - Maintain per-pixel change bitmap for spatial analysis
+//   - Tile-based tracking for efficient region updates (configurable tile size)
+//   - Heat map tracking for temporal analysis of change patterns
+//   - Track statistics: changed pixels, change rate, hotspots
+//   - Provide bounding box calculation for minimal update regions
+class ChangeTracker
+{
+private:
+    // Tile-based tracking configuration
+    static constexpr int TILE_SIZE = 32;  // 32×32 pixel tiles
+    static constexpr int TILES_X = (H_RES + TILE_SIZE - 1) / TILE_SIZE;
+    static constexpr int TILES_Y = (V_RES + TILE_SIZE - 1) / TILE_SIZE;
+    static constexpr int TOTAL_TILES = TILES_X * TILES_Y;
+
+    std::vector<uint8_t> prev_framebuffer;
+    std::vector<bool> change_map;
+    std::vector<bool> dirty_tiles;   // Per-tile dirty flags
+    std::vector<uint32_t> heat_map;  // Change frequency per pixel
+    int total_pixels = H_RES * V_RES;
+    int changed_pixels = 0;
+    int dirty_tile_count = 0;
+    int frames_tracked = 0;
+    bool first_frame = true;
+
+    // Statistics accumulation
+    uint64_t total_changed_pixels = 0;
+    int min_changed = total_pixels, max_changed = 0;
+
+    // Bounding box of changes (for dirty rectangle optimization)
+    int min_x, max_x, min_y, max_y;
+
+public:
+    ChangeTracker()
+        : prev_framebuffer(H_RES * V_RES * 4, 0),
+          change_map(H_RES * V_RES, false),
+          dirty_tiles(TOTAL_TILES, false),
+          heat_map(H_RES * V_RES, 0)
+    {
+    }
+
+    // Track changes between current and previous frame
+    // Called once per frame after framebuffer is fully updated
+    void track(const uint8_t *current_fb)
+    {
+        if (first_frame) {
+            // Copy initial framebuffer as baseline
+            memcpy(prev_framebuffer.data(), current_fb, H_RES * V_RES * 4);
+            first_frame = false;
+            return;
+        }
+
+        // Reset bounding box and tile dirty flags
+        min_x = H_RES, max_x = -1;
+        min_y = V_RES, max_y = -1;
+        changed_pixels = 0;
+        dirty_tile_count = 0;
+        std::fill(dirty_tiles.begin(), dirty_tiles.end(), false);
+
+        // Per-pixel comparison with BGRA color equality check
+        for (int y = 0; y < V_RES; ++y) {
+            for (int x = 0; x < H_RES; ++x) {
+                int pixel_idx = y * H_RES + x;
+                int byte_idx = pixel_idx * 4;
+
+                // Compare all 4 channels (BGRA)
+                bool changed =
+                    (current_fb[byte_idx] != prev_framebuffer[byte_idx] ||
+                     current_fb[byte_idx + 1] !=
+                         prev_framebuffer[byte_idx + 1] ||
+                     current_fb[byte_idx + 2] !=
+                         prev_framebuffer[byte_idx + 2] ||
+                     current_fb[byte_idx + 3] !=
+                         prev_framebuffer[byte_idx + 3]);
+
+                change_map[pixel_idx] = changed;
+
+                if (changed) {
+                    changed_pixels++;
+
+                    // Update heat map (temporal analysis)
+                    if (heat_map[pixel_idx] < UINT32_MAX)
+                        heat_map[pixel_idx]++;
+
+                    // Update bounding box
+                    if (x < min_x)
+                        min_x = x;
+                    if (x > max_x)
+                        max_x = x;
+                    if (y < min_y)
+                        min_y = y;
+                    if (y > max_y)
+                        max_y = y;
+
+                    // Mark tile as dirty
+                    int tile_x = x / TILE_SIZE;
+                    int tile_y = y / TILE_SIZE;
+                    int tile_idx = tile_y * TILES_X + tile_x;
+                    if (!dirty_tiles[tile_idx]) {
+                        dirty_tiles[tile_idx] = true;
+                        dirty_tile_count++;
+                    }
+                }
+            }
+        }
+
+        // Update statistics
+        total_changed_pixels += changed_pixels;
+        if (changed_pixels < min_changed)
+            min_changed = changed_pixels;
+        if (changed_pixels > max_changed)
+            max_changed = changed_pixels;
+
+        // Copy current frame as new baseline
+        memcpy(prev_framebuffer.data(), current_fb, H_RES * V_RES * 4);
+        frames_tracked++;
+    }
+
+    void report() const
+    {
+        if (frames_tracked == 0) {
+            std::cout << "Change tracking: No frames tracked\n";
+            return;
+        }
+
+        double avg_changed =
+            frames_tracked > 0
+                ? static_cast<double>(total_changed_pixels) / frames_tracked
+                : 0.0;
+        double avg_change_rate = (100.0 * avg_changed) / total_pixels;
+
+        std::cout << "Change Tracking Report:\n";
+        std::cout << "  Frames tracked: " << frames_tracked << "\n";
+        std::cout << "  Last frame changes: " << changed_pixels << "/"
+                  << total_pixels << " pixels ("
+                  << (100.0 * changed_pixels / total_pixels) << "%)\n";
+        std::cout << "  Average change rate: " << avg_change_rate << "% ("
+                  << static_cast<int>(avg_changed) << " pixels/frame)\n";
+        std::cout << "  Change range: [" << min_changed << ", " << max_changed
+                  << "] pixels\n";
+
+        // Tile-based statistics
+        std::cout << "\nTile-based Analysis (tile size: " << TILE_SIZE << "×"
+                  << TILE_SIZE << "):\n";
+        std::cout << "  Dirty tiles: " << dirty_tile_count << "/" << TOTAL_TILES
+                  << " (" << (100.0 * dirty_tile_count / TOTAL_TILES) << "%)\n";
+        std::cout << "  Tile grid: " << TILES_X << "×" << TILES_Y << "\n";
+
+        // Calculate tile update efficiency
+        if (dirty_tile_count > 0) {
+            int tile_area = dirty_tile_count * TILE_SIZE * TILE_SIZE;
+            double tile_efficiency = (100.0 * changed_pixels) / tile_area;
+            std::cout << "  Tile update area: " << tile_area << " pixels ("
+                      << tile_efficiency << "% utilized)\n";
+        }
+
+        // Report bounding box if there were changes in last frame
+        if (changed_pixels > 0) {
+            int bbox_w = max_x - min_x + 1;
+            int bbox_h = max_y - min_y + 1;
+            int bbox_area = bbox_w * bbox_h;
+            double bbox_efficiency =
+                (100.0 * changed_pixels) / bbox_area;  // Fill ratio
+
+            std::cout << "\nDirty Rectangle (bounding box):\n";
+            std::cout << "  Position: (" << min_x << ", " << min_y << ") to ("
+                      << max_x << ", " << max_y << ")\n";
+            std::cout << "  Size: " << bbox_w << "×" << bbox_h << " ("
+                      << bbox_area << " pixels, " << bbox_efficiency
+                      << "% fill)\n";
+        }
+
+        // Heat map analysis (find hottest regions)
+        if (frames_tracked > 1) {
+            std::cout << "\nHeat Map Analysis:\n";
+
+            // Find top 5 hottest pixels
+            std::vector<std::pair<uint32_t, int>> hot_pixels;
+            for (int i = 0; i < total_pixels; ++i) {
+                if (heat_map[i] > 0) {
+                    hot_pixels.push_back({heat_map[i], i});
+                }
+            }
+            std::sort(hot_pixels.rbegin(), hot_pixels.rend());
+
+            int num_changed_pixels = hot_pixels.size();
+            std::cout << "  Pixels changed at least once: "
+                      << num_changed_pixels << " ("
+                      << (100.0 * num_changed_pixels / total_pixels)
+                      << "% of total)\n";
+
+            if (!hot_pixels.empty()) {
+                int top_n = std::min(5, static_cast<int>(hot_pixels.size()));
+                std::cout << "  Top " << top_n << " hottest pixels:\n";
+                for (int i = 0; i < top_n; ++i) {
+                    int idx = hot_pixels[i].second;
+                    int x = idx % H_RES;
+                    int y = idx / H_RES;
+                    double change_freq =
+                        (100.0 * hot_pixels[i].first) / frames_tracked;
+                    std::cout << "    " << (i + 1) << ". (" << x << ", " << y
+                              << "): " << hot_pixels[i].first << " changes ("
+                              << change_freq << "%)\n";
+                }
+            }
+        }
+    }
+
+    int get_changed_pixels() const { return changed_pixels; }
+    int get_dirty_tile_count() const { return dirty_tile_count; }
+
+    // Get change map for spatial analysis or optimized rendering
+    const std::vector<bool> &get_change_map() const { return change_map; }
+
+    // Get dirty tiles bitmap (tile-based update optimization)
+    const std::vector<bool> &get_dirty_tiles() const { return dirty_tiles; }
+
+    // Get heat map for temporal analysis
+    const std::vector<uint32_t> &get_heat_map() const { return heat_map; }
+
+    // Get bounding box of changes (returns true if valid)
+    bool get_dirty_rect(int &x, int &y, int &w, int &h) const
+    {
+        if (changed_pixels == 0 || max_x < 0)
+            return false;
+
+        x = min_x;
+        y = min_y;
+        w = max_x - min_x + 1;
+        h = max_y - min_y + 1;
+        return true;
+    }
+
+    // Check if a specific tile is dirty
+    bool is_tile_dirty(int tile_x, int tile_y) const
+    {
+        if (tile_x < 0 || tile_x >= TILES_X || tile_y < 0 || tile_y >= TILES_Y)
+            return false;
+        int tile_idx = tile_y * TILES_X + tile_x;
+        return dirty_tiles[tile_idx];
+    }
+
+    // Get tile bounds in pixel coordinates
+    void get_tile_bounds(int tile_x, int tile_y, int &x, int &y, int &w, int &h)
+        const
+    {
+        x = tile_x * TILE_SIZE;
+        y = tile_y * TILE_SIZE;
+        w = std::min(TILE_SIZE, H_RES - x);
+        h = std::min(TILE_SIZE, V_RES - y);
+    }
+
+    // Tile configuration getters
+    static constexpr int get_tile_size() { return TILE_SIZE; }
+    static constexpr int get_tiles_x() { return TILES_X; }
+    static constexpr int get_tiles_y() { return TILES_Y; }
+};
+
 // Standalone PNG encoder (no external dependencies)
 // Adapted from sysprog21/mado headless-ctl.c
 
@@ -819,6 +1084,7 @@ void print_usage(const char *prog)
         << "  --validate-timing       Enable real-time VGA timing validation\n"
         << "  --validate-signals      Enable sync signal glitch detection\n"
         << "  --validate-coordinates  Enable coordinate bounds checking\n"
+        << "  --track-changes         Enable frame-to-frame change tracking\n"
         << "  --help                  Show this help\n\n"
         << "Interactive keys:\n"
         << "  p     - Save frame to test.png\n"
@@ -842,7 +1108,10 @@ void print_usage(const char *prog)
         << "  --validate-coordinates  Defense-in-depth coordinate bounds "
            "checking\n"
         << "                          Prevents wild pointer crashes "
-           "(auto-stops at 10 errors)\n";
+           "(auto-stops at 10 errors)\n"
+        << "  --track-changes         Tracks pixel changes between frames\n"
+        << "                          Reports change rate, dirty rectangles, "
+           "and statistics\n";
 }
 
 // Simulate VGA frame generation with performance optimizations
@@ -870,6 +1139,7 @@ void print_usage(const char *prog)
 //   - If monitor is non-null, calls monitor->tick() each clock for validation
 //   - If coord_validator is non-null, validates coordinates before framebuffer
 //   writes
+//   - If change_tracker is non-null, tracks frame changes on vsync falling edge
 inline void simulate_frame(Vvga_nyancat *top,
                            uint8_t *fb,
                            int &hpos,
@@ -879,10 +1149,14 @@ inline void simulate_frame(Vvga_nyancat *top,
                            vluint64_t *trace_time = nullptr,
                            TimingMonitor *monitor = nullptr,
                            SyncValidator *validator = nullptr,
-                           CoordinateValidator *coord_validator = nullptr)
+                           CoordinateValidator *coord_validator = nullptr,
+                           ChangeTracker *change_tracker = nullptr)
 {
     // Precompute row base address for current row
     int row_base = (vpos >= 0 && vpos < V_RES) ? (vpos * H_RES) << 2 : -1;
+
+    // Track previous vsync state for edge detection (frame end tracking)
+    static bool prev_vsync = true;
 
     for (int i = 0; i < clocks; ++i) {
         // Clock cycle: proper edge evaluation for Verilator
@@ -904,6 +1178,12 @@ inline void simulate_frame(Vvga_nyancat *top,
         // Sync signal validation on rising edge
         if (validator)
             validator->tick(top->hsync, top->vsync);
+
+        // Detect frame end: vsync rising edge (end of vertical sync pulse)
+        // This marks completion of frame rendering, trigger change tracking
+        if (change_tracker && top->vsync && !prev_vsync)
+            change_tracker->track(fb);
+        prev_vsync = top->vsync;
 
         // Detect frame start: both syncs go low simultaneously during vsync
         if (!top->hsync && !top->vsync) {
@@ -960,6 +1240,7 @@ int main(int argc, char **argv)
     bool validate_timing = false;
     bool validate_signals = false;
     bool validate_coordinates = false;
+    bool track_changes = false;
     const char *output_file = "test.png";
     const char *trace_file = nullptr;
     int trace_clocks = CLOCKS_PER_FRAME;  // Default: 1 complete frame
@@ -979,6 +1260,8 @@ int main(int argc, char **argv)
             validate_signals = true;
         } else if (strcmp(argv[i], "--validate-coordinates") == 0) {
             validate_coordinates = true;
+        } else if (strcmp(argv[i], "--track-changes") == 0) {
+            track_changes = true;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -1082,6 +1365,15 @@ int main(int argc, char **argv)
             << "Defense-in-depth bounds checking (auto-stops at 10 errors)\n";
     }
 
+    // Initialize change tracker if requested
+    ChangeTracker *change_tracker = nullptr;
+    if (track_changes) {
+        change_tracker = new ChangeTracker();
+        std::cout << "Frame change tracking enabled\n";
+        std::cout
+            << "Tracking pixel-level changes between consecutive frames\n";
+    }
+
     bool quit = false;
 
     // Batch mode: generate one frame and exit
@@ -1101,7 +1393,7 @@ int main(int argc, char **argv)
         }
 
         simulate_frame(top, fb_ptr, hpos, vpos, sim_clocks, trace, &trace_time,
-                       monitor, validator, coord_validator);
+                       monitor, validator, coord_validator, change_tracker);
         if (trace) {
             remaining_trace_clocks -= sim_clocks * 2;  // 2 edges per clock
         }
@@ -1144,7 +1436,7 @@ int main(int argc, char **argv)
         // Simulate in smaller chunks for responsive input
         // VCD tracing disabled in interactive mode (too much data)
         simulate_frame(top, fb_ptr, hpos, vpos, 50000, nullptr, nullptr,
-                       monitor, validator, coord_validator);
+                       monitor, validator, coord_validator, change_tracker);
 
         // Update display after each simulation chunk
         SDL_UpdateTexture(texture, nullptr, fb_ptr, H_RES * 4);
@@ -1173,6 +1465,11 @@ int main(int argc, char **argv)
     if (coord_validator) {
         coord_validator->report();
         delete coord_validator;
+    }
+
+    if (change_tracker) {
+        change_tracker->report();
+        delete change_tracker;
     }
 
     if (trace) {
