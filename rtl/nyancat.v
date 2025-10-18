@@ -261,18 +261,16 @@ module nyancat (
         end
 
     // Assertion 8: Output alignment - verify rrggbb matches pipeline correctly
-    // When display is active, rrggbb should match previous color_q value
-    // When not active, rrggbb should be zero
+    // rrggbb is combinational: assign rrggbb = (activevideo && in_display_q2) ? color_q : 6'b0
+    // Check current cycle's activevideo and in_display_q2 against current rrggbb
     always @(posedge px_clk)
         if (past_valid && !reset && !$past(reset)) begin
-            if ($past(activevideo) && $past(in_display_q2)) begin
-                if (rrggbb !== $past(color_q))
+            if (activevideo && in_display_q2) begin
+                if (rrggbb !== color_q)
                     $error(
                         "[ASSERTION FAILED] Output misalignment: rrggbb=%h should match color_q=%h",
                         rrggbb,
-                        $past(
-                            color_q
-                        )
+                        color_q
                     );
             end else begin
                 if (rrggbb !== 6'b0)

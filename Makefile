@@ -72,7 +72,7 @@ obj_dir/Vvga_nyancat.mk: $(SOURCES) $(SIM_DIR)/main.cpp $(RTL_DIR)/videomode.vh
 	           --trace \
 	           -I$(RTL_DIR) \
 	           $(VFLAGS) \
-	           -CFLAGS "$(CFLAGS)" -LDFLAGS "$(LDFLAGS)"
+	           -CFLAGS "$(CFLAGS)" -LDFLAGS "$(LDFLAGS)" 2>&1 | grep -v "V e r i l a t i o n" | grep -v "Verilator:" || true
 
 # Build simulation binary
 $(SIM_BINARY): obj_dir/Vvga_nyancat.mk $(DATA_FILES)
