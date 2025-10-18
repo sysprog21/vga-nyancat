@@ -17,8 +17,8 @@
 //
 // Architecture:
 //   - 12-frame animation stored as 64×64 4-bit character indices
-//   - Real-time 8× nearest-neighbor scaling to 512×512 display resolution
-//   - Centered positioning on 640×480 VGA display (64px left margin, top-aligned)
+//   - Auto-scaling based on vertical resolution (SCALE = V_ACTIVE / FRAME_H)
+//   - Nearest-neighbor upscaling with horizontal centering
 //   - 2-stage pipeline: ROM address → frame ROM → palette ROM → color output
 //   - Frame sequencing: ~11 fps (90ms/frame at 31.5MHz pixel clock)
 //
@@ -42,8 +42,14 @@ module nyancat (
     // =========================================================================
 
     // Display geometry (uses video mode parameters from videomode.vh)
-    localparam FRAME_W = 64, FRAME_H = 64, SCALE = 8;  // Source size and scale factor
-    localparam SCALED_W = FRAME_W * SCALE, SCALED_H = FRAME_H * SCALE;  // 512×512
+    localparam FRAME_W = 64, FRAME_H = 64;  // Source frame size
+
+    // Auto-scale factor based on vertical resolution (maximize display size)
+    // Target: use full vertical height while maintaining integer scaling
+    localparam SCALE = V_ACTIVE / FRAME_H;  // Integer division for pixel-perfect scaling
+    localparam SCALE_SHIFT = $clog2(SCALE);  // Log2 of scale for bit shifting
+
+    localparam SCALED_W = FRAME_W * SCALE, SCALED_H = FRAME_H * SCALE;
     // Use H_ACTIVE and V_ACTIVE from videomode.vh instead of hardcoded values
     localparam OFFSET_X = (H_ACTIVE - SCALED_W) / 2, OFFSET_Y = 0;  // Centering offsets
 
@@ -77,27 +83,32 @@ module nyancat (
     // =========================================================================
     // Coordinate Transformation and ROM Addressing
     // =========================================================================
-    // Transform input pixel coordinates [0,639]×[0,479] to ROM addresses:
-    //   1. Remove centering offset → relative coordinates
-    //   2. Descale by factor of 8 → source frame coordinates [0,63]×[0,63]
+    // Transform input pixel coordinates to ROM addresses:
+    //   1. Remove centering offset → relative coordinates [0, SCALED_W-1]
+    //   2. Descale by SCALE factor → source frame coordinates [0,63]×[0,63]
     //   3. Calculate ROM address from frame index and source coordinates
 
     // Step 1: Remove centering offset to get coordinates relative to animation area
     // Bounds check first to avoid underflow, then compute relative coordinates
+    /* verilator lint_off WIDTHEXPAND */
     wire                     in_display_x = (x_px >= OFFSET_X) && (x_px < OFFSET_X + SCALED_W);
+    /* verilator lint_on WIDTHEXPAND */
     /* verilator lint_off UNSIGNED */
     wire                     in_display_y = (y_px >= OFFSET_Y) && (y_px < OFFSET_Y + SCALED_H);
     /* verilator lint_on UNSIGNED */
     wire                     in_display = in_display_x && in_display_y;
 
     // Relative coordinates (valid only when in_display is high)
+    /* verilator lint_off WIDTHTRUNC */
     wire [X_COORD_WIDTH-1:0] rel_x = x_px - OFFSET_X;
     wire [Y_COORD_WIDTH-1:0] rel_y = y_px - OFFSET_Y;
+    /* verilator lint_on WIDTHTRUNC */
 
-    // Step 2: Descale coordinates (divide by 8) to map to source frame [0,63]
-    // Shift right by 3 bits (divide by 8) and take lower 6 bits for 64×64 frame
+    // Step 2: Descale coordinates by SCALE factor to map to source frame [0,63]
+    // Division by constant SCALE - synthesis tools optimize to efficient hardware
+    // (bit-shifts for power-of-2, shift-add sequences for other values)
     /* verilator lint_off WIDTHTRUNC */
-    wire [              5:0] src_x = rel_x[8:3], src_y = rel_y[8:3];  // Right shift 3 = divide by 8
+    wire [              5:0] src_x = rel_x / SCALE, src_y = rel_y / SCALE;
     /* verilator lint_on WIDTHTRUNC */
 
     // Step 3: Calculate ROM address using frame index and source coordinates
@@ -198,6 +209,7 @@ module nyancat (
     // Assertion 3: Coordinate bounds check during active display
     // Note: activevideo is combinational from vga_sync_gen, while x_px/y_px are registered
     // Check against previous cycle's activevideo to account for timing skew
+    /* verilator lint_off WIDTHEXPAND */
     always @(posedge px_clk)
         if (past_valid && !reset && $past(activevideo)) begin
             if (x_px >= H_ACTIVE)
@@ -205,6 +217,7 @@ module nyancat (
             if (y_px >= V_ACTIVE)
                 $error("[ASSERTION FAILED] y_px=%0d exceeds V_ACTIVE=%0d", y_px, V_ACTIVE);
         end
+    /* verilator lint_on WIDTHEXPAND */
 
     // Assertion 4: Frame index must stay within valid range [0, 11]
     always @(posedge px_clk)

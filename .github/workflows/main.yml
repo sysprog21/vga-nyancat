@@ -15,7 +15,7 @@ jobs:
       matrix:
         video_mode:
           - VGA_640x480_72
-          - VGA_800x600_60
+          - XGA_1024x768_60
       fail-fast: false
       max-parallel: 2
 

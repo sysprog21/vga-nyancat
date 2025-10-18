@@ -148,6 +148,7 @@ module vga_sync_gen (
     // Assertion 7: Pixel coordinates validity during active video
     // Note: x_px and y_px are registered (1-cycle delayed from hc/vc)
     // Check against previous cycle's activevideo to account for timing
+    /* verilator lint_off WIDTHEXPAND */
     always @(posedge px_clk)
         if (past_valid && !reset && !$past(reset) && $past(activevideo)) begin
             if (x_px >= H_ACTIVE)
@@ -163,6 +164,41 @@ module vga_sync_gen (
                     V_ACTIVE
                 );
         end
+    /* verilator lint_on WIDTHEXPAND */
+
+    // Assertion 8: Registered coordinate derivation correctness
+    // x_px and y_px are registered versions of (hc - H_BLANK) and (vc - V_BLANK)
+    // Verify exact one-cycle relationship between counters and pixel coordinates
+    // Note: Must truncate to actual signal width to match RTL behavior (handles underflow)
+    reg [H_COUNTER_WIDTH-1:0] hc_prev;
+    reg [V_COUNTER_WIDTH-1:0] vc_prev;
+    always @(posedge px_clk) begin
+        hc_prev <= hc;
+        vc_prev <= vc;
+    end
+    /* verilator lint_off WIDTHTRUNC */
+    wire [X_COORD_WIDTH-1:0] expected_x_px = hc_prev - H_BLANK;
+    wire [Y_COORD_WIDTH-1:0] expected_y_px = vc_prev - V_BLANK;
+    /* verilator lint_on WIDTHTRUNC */
+    /* verilator lint_off WIDTHTRUNC */
+    always @(posedge px_clk)
+        if (past_valid && !reset && !$past(reset)) begin
+            if (x_px !== expected_x_px)
+                $error(
+                    "[ASSERTION FAILED] x_px=%0d should match expected %0d (from hc_prev=%0d)",
+                    x_px,
+                    expected_x_px,
+                    hc_prev
+                );
+            if (y_px !== expected_y_px)
+                $error(
+                    "[ASSERTION FAILED] y_px=%0d should match expected %0d (from vc_prev=%0d)",
+                    y_px,
+                    expected_y_px,
+                    vc_prev
+                );
+        end
+    /* verilator lint_on WIDTHTRUNC */
 `endif
 
 endmodule
